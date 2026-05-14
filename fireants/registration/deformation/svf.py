@@ -30,6 +30,7 @@ from fireants.utils.util import grad_smoothing_hook
 from fireants.utils.globals import MIN_IMG_SIZE
 from copy import deepcopy
 import gc
+from fireants.interpolator.grid_sample import device_aware_interpolate
 
 class StationaryVelocity(nn.Module, AbstractDeformation):
     '''
@@ -114,7 +115,7 @@ class StationaryVelocity(nn.Module, AbstractDeformation):
         old_shape = self.velocity_field.shape
         old_optimizer_state = self.optimizer.state_dict()
         # get new velocity field
-        velocity_field = F.interpolate(self.velocity_field.detach().permute(*self.permute_vtoimg), size=size, mode=mode, align_corners=True, 
+        velocity_field = device_aware_interpolate(self.velocity_field.detach().permute(*self.permute_vtoimg), size=size, mode=mode, align_corners=True,
                     ).permute(*self.permute_imgtov)
         velocity_field = nn.Parameter(velocity_field)
         self.register_parameter('velocity_field', velocity_field)
@@ -129,7 +130,7 @@ class StationaryVelocity(nn.Module, AbstractDeformation):
             for k, v in state_dict[g].items():
                 # this is probably a state of the tensor
                 if isinstance(v, torch.Tensor) and v.shape == old_shape:
-                    state_dict[g][k] = F.interpolate(v.permute(*self.permute_vtoimg), size=size, mode=mode, align_corners=True, 
+                    state_dict[g][k] = device_aware_interpolate(v.permute(*self.permute_vtoimg), size=size, mode=mode, align_corners=True,
                         ).permute(*self.permute_imgtov)
         #         if isinstance(v, torch.Tensor):
         #             print(k, v.shape)

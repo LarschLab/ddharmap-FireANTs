@@ -31,6 +31,8 @@ from fireants.utils.util import save_itk_affine as savemat
 from fireants.utils.globals import PERMITTED_ANTS_TXT_EXT, PERMITTED_ANTS_MAT_EXT
 import logging
 from fireants.interpolator import fireants_interpolator
+from fireants.interpolator.grid_sample import device_aware_interpolate
+from fireants.utils.device import empty_device_cache
 logger = logging.getLogger(__name__)
 
 
@@ -277,7 +279,7 @@ class AffineRegistration(AbstractRegistration):
                 )
             else:
                 if scale > 1:
-                    fixed_image_down = F.interpolate(
+                    fixed_image_down = device_aware_interpolate(
                         fixed_arrays, size=size_down, mode=self.fixed_images.interpolate_mode, align_corners=True
                     )
                 else:
@@ -286,7 +288,7 @@ class AffineRegistration(AbstractRegistration):
 
             # this is in physical space
             pbar = tqdm(range(iters)) if verbose else range(iters)
-            torch.cuda.empty_cache()
+            empty_device_cache(fixed_arrays)
             for i in pbar:
                 self.optimizer.zero_grad()
                 affinemat = ((moving_p2t @ self.get_affine_matrix() @ fixed_t2p)[:, :-1]).contiguous().to(self.dtype)

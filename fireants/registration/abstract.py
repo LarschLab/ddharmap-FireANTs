@@ -28,6 +28,7 @@ from functools import partial
 from fireants.utils.imageutils import is_torch_float_type, downsample 
 from fireants.losses.cc import separable_filtering
 from fireants.interpolator import fireants_interpolator
+from fireants.interpolator.grid_sample import device_aware_interpolate
 from fireants.io.keypoints import BatchedKeypoints
 import logging
 
@@ -221,13 +222,13 @@ class AbstractRegistration(ABC):
         """
         img, mask = self._split_image_and_mask_last_channel(arrays)
         if gaussians is None:
-            img_down = F.interpolate(img, size=size, mode=mode, align_corners=align_corners)
+            img_down = device_aware_interpolate(img, size=size, mode=mode, align_corners=align_corners)
         else:
             img_down = downsample(img, size=size, mode=mode, gaussians=gaussians)
 
         if mask is None:
             return img_down
-        mask_down = F.interpolate(mask, size=size, mode=mode, align_corners=align_corners)
+        mask_down = device_aware_interpolate(mask, size=size, mode=mode, align_corners=align_corners)
         return self._concat_image_and_mask_last_channel(img_down, mask_down)
 
     def _smooth_image_not_mask(self, arrays: torch.Tensor, gaussians) -> torch.Tensor:

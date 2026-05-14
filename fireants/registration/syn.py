@@ -30,6 +30,7 @@ from fireants.utils.imageutils import downsample
 from fireants.utils.util import compose_warp
 from fireants.utils.warputils import compositive_warp_inverse
 from fireants.interpolator import fireants_interpolator
+from fireants.interpolator.grid_sample import device_aware_interpolate
 from fireants.registration.deformablemixin import DeformableMixin
 
 class SyNRegistration(AbstractRegistration, DeformableMixin):
@@ -184,7 +185,7 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
         fwd_warp_field = self.fwd_warp.get_warp()  # [N, HWD, 3]
         if tuple(fwd_warp_field.shape[1:-1]) != tuple(shape[2:]):
             # interpolate this
-            fwd_warp_field = F.interpolate(
+            fwd_warp_field = device_aware_interpolate(
                 fwd_warp_field.permute(*self.fwd_warp.permute_vtoimg),
                 size=shape[2:],
                 mode="trilinear",
@@ -194,7 +195,7 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
         # compute inverse of rev_warp with the size of `fixed_images`
         rev_inv_warp_field = compositive_warp_inverse(fixed_images, self.rev_warp.get_warp(), displacement=True, scales=self.scales, iterations=self.iterations)
         if tuple(rev_inv_warp_field.shape[1:-1]) != tuple(shape[2:]):
-            rev_inv_warp_field = F.interpolate(
+            rev_inv_warp_field = device_aware_interpolate(
                 self.rev_warp.get_warp().permute(*self.rev_warp.permute_vtoimg),
                 size=shape[2:],
                 mode="trilinear",
@@ -274,7 +275,7 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
                 )
                 moving_image_blur = self._smooth_image_not_mask(moving_arrays, gaussians)
             else:
-                fixed_image_down = F.interpolate(
+                fixed_image_down = device_aware_interpolate(
                     fixed_arrays, size=size_down, mode=self.fixed_images.interpolate_mode, align_corners=True
                 )
                 moving_image_blur = moving_arrays

@@ -28,6 +28,7 @@ from fireants.utils.globals import MIN_IMG_SIZE
 from fireants.utils.util import check_and_raise_cond, augment_filenames, check_correct_ext, any_extension, savetxt
 from fireants.utils.globals import PERMITTED_ANTS_TXT_EXT, PERMITTED_ANTS_MAT_EXT
 from fireants.utils.util import save_itk_affine as savemat
+from fireants.interpolator.grid_sample import device_aware_interpolate, torch_grid_sampler_3d
 import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -161,7 +162,16 @@ class MomentsRegistration(AbstractRegistration):
             # moved_coords_m is now of size [N, S, dims] -> revert it back to [N, H, W, D, dims]
             moved_coords_m = moved_coords_m.view(-1, *fixed_arrays.shape[2:], self.dims)
             # sample moving image?!
-            moved_image = F.grid_sample(moving_arrays, moved_coords_m.to(moving_arrays.dtype), mode='bilinear', align_corners=True)
+            if moving_arrays.ndim == 5:
+                moved_image = torch_grid_sampler_3d(
+                    moving_arrays,
+                    grid=moved_coords_m.to(moving_arrays.dtype),
+                    mode='bilinear',
+                    align_corners=True,
+                    is_displacement=False,
+                )
+            else:
+                moved_image = F.grid_sample(moving_arrays, moved_coords_m.to(moving_arrays.dtype), mode='bilinear', align_corners=True)
             loss_val = self.loss_fn(moved_image, fixed_arrays).flatten(1).sum(1)
             index = torch.where(loss_val < best_metric)[0]
             best_metric[index] = loss_val[index]
@@ -212,10 +222,10 @@ class MomentsRegistration(AbstractRegistration):
                 )
             else:
                 # just downsample
-                fixed_arrays = F.interpolate(
+                fixed_arrays = device_aware_interpolate(
                     fixed_arrays, size=size_down_f, mode=self.fixed_images.interpolate_mode, align_corners=True
                 )
-                moving_arrays = F.interpolate(
+                moving_arrays = device_aware_interpolate(
                     moving_arrays, size=size_down_m, mode=self.moving_images.interpolate_mode, align_corners=True
                 )
         return fixed_arrays, moving_arrays

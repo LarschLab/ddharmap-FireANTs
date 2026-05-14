@@ -30,6 +30,7 @@ from fireants.losses.cc import gaussian_1d, separable_filtering
 from fireants.utils.imageutils import downsample
 from fireants.utils.globals import MIN_IMG_SIZE
 from fireants.interpolator import fireants_interpolator
+from fireants.interpolator.grid_sample import device_aware_interpolate
 import logging
 logger = logging.getLogger(__name__)
 
@@ -345,7 +346,7 @@ class RigidRegistration(AbstractRegistration):
                 moving_image_blur = self._smooth_image_not_mask(moving_image_blur, gaussians)
             else:
                 if scale > 1:
-                    fixed_image_down = F.interpolate(
+                    fixed_image_down = device_aware_interpolate(
                         fixed_arrays, size=size_down, mode=self.fixed_images.interpolate_mode, align_corners=True
                     )
                 else:

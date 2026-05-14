@@ -1,4 +1,14 @@
 *egg-info
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+.DS_Store
+.idea/
 **/*.nii.gz
 *pdf
 *svg

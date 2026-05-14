@@ -20,6 +20,7 @@ from tqdm import tqdm
 import torch.nn.functional as F
 from fireants.utils.util import catchtime
 from typing import Optional, List
+from fireants.interpolator.grid_sample import device_aware_interpolate
 
 from scipy.ndimage import zoom
 
@@ -58,7 +59,7 @@ class InverseConsistencyOperator(nn.Module):
         # if ref_shape != shape:
         if scale > 1:
             linear = 'bilinear' if self.dims == 2 else 'trilinear'
-            ref_disp_i = F.interpolate(self.ref_disp.permute(*self.permute_vtoimg), scale_factor=1.0/scale, mode=linear, align_corners=True).permute(*self.permute_imgtov)
+            ref_disp_i = device_aware_interpolate(self.ref_disp.permute(*self.permute_vtoimg), scale_factor=1.0/scale, mode=linear, align_corners=True).permute(*self.permute_imgtov)
         else:
             ref_disp_i = self.ref_disp
 
@@ -94,7 +95,7 @@ class ShapeAveragingOperator(nn.Module):
         shape = warp.shape[1:-1]
         ref_shape = self.ref_warp.shape[1:-1]
         if shape != ref_shape:
-            ref_warp_i = F.interpolate(self.ref_warp.permute(*self.permute_vtoimg), warp.shape[1:-1], mode=self.mode, align_corners=True)
+            ref_warp_i = device_aware_interpolate(self.ref_warp.permute(*self.permute_vtoimg), warp.shape[1:-1], mode=self.mode, align_corners=True)
             ref_warp_i = ref_warp_i.permute(*self.permute_imgtov)
         else:
             ref_warp_i = self.ref_warp
@@ -168,7 +169,7 @@ def compositive_warp_inverse(image: BatchedImages, ref_disp: torch.Tensor,
         B = warp.shape[0]
         shape = list(warp.shape[1:-1])
         linear = 'bilinear' if reg.dims == 2 else 'trilinear'
-        ref_disp_resized = F.interpolate(ref_disp.permute(*reg.warp.permute_vtoimg), shape, mode=linear, align_corners=True).permute(*reg.warp.permute_imgtov)
+        ref_disp_resized = device_aware_interpolate(ref_disp.permute(*reg.warp.permute_vtoimg), shape, mode=linear, align_corners=True).permute(*reg.warp.permute_imgtov)
         warp.data.copy_(-ref_disp_resized)
         del ref_disp_resized
     # could be called from within a nograd context

@@ -19,6 +19,7 @@ from torch.nn import functional as F
 from fireants.utils.imageutils import jacobian as jacobian_fn
 from fireants.interpolator import fireants_interpolator
 from fireants.registration.optimizers.adam import _get_smoothing_wrapper, compose_n_warps
+from fireants.interpolator.grid_sample import device_aware_interpolate
 import logging
 logger = logging.getLogger(__name__)
 from typing import Optional
@@ -99,7 +100,7 @@ class WarpSGD:
         self.warp = warp
         mode = 'bilinear' if self.n_dims == 2 else 'trilinear'
         if self.velocity is not None:
-            self.velocity = F.interpolate(self.velocity.detach().permute(*self.permute_vtoimg), size=size, mode=mode, align_corners=True,
+            self.velocity = device_aware_interpolate(self.velocity.detach().permute(*self.permute_vtoimg), size=size, mode=mode, align_corners=True,
                                 ).permute(*self.permute_imgtov)
         self.half_resolution = 1.0/(max(warp.shape[1:-1]) - 1)
         self.initialize_grid(size, grid_copy=grid_copy)

@@ -28,6 +28,7 @@ import logging
 from typing import Optional
 from fireants.interpolator import fireants_interpolator
 import SimpleITK as sitk
+from fireants.utils.device import device_memory_allocated, empty_device_cache, synchronize_device
 logging.basicConfig(level=logging.INFO)
 
 logger = logging.getLogger(__name__)
@@ -67,10 +68,10 @@ def get_tensor_memory_details() -> List[Tuple[torch.Tensor, float, str, str]]:
 def get_gpu_memory(clear: bool = False):
     """Get current GPU memory usage in MB"""
     if clear:
-        torch.cuda.empty_cache()
+        empty_device_cache()
         gc.collect()
-    torch.cuda.synchronize()
-    return torch.cuda.memory_allocated() / 1024 / 1024
+    synchronize_device()
+    return device_memory_allocated()
 
 class ConvergenceMonitor:
     def __init__(self, N, slope):

@@ -19,6 +19,7 @@ from torch import nn
 from tqdm import tqdm
 import torch.nn.functional as F
 from fireants.utils.util import catchtime
+from fireants.interpolator.grid_sample import device_aware_interpolate, torch_grid_sampler_3d
 from typing import Optional, List
 from fireants.losses.cc import gaussian_1d, separable_filtering
 from fireants.types import ItemOrList
@@ -148,7 +149,7 @@ def downsample(image: torch.Tensor, size: List[int], mode: str, sigma: Optional[
         gaussians = [gaussian_1d(s, truncated=2) for s in sigma]
     # otherwise gaussians is given, just downsample
     image_down = separable_filtering(image, gaussians)
-    image_down = F.interpolate(image_down, size=size, mode=mode, align_corners=True)
+    image_down = device_aware_interpolate(image_down, size=size, mode=mode, align_corners=True)
     return image_down
 
 def downsample_fft(image: torch.Tensor, size: List[int], padding=1) -> torch.Tensor:
@@ -215,7 +216,7 @@ def scaling_and_squaring(u, grid, n = 6):
     if dims == 3:
         for i in range(n):
             vimg = v.permute(0, 4, 1, 2, 3)          # [1, 3, D, H, W]
-            v = v + F.grid_sample(vimg, v + grid, align_corners=True).permute(0, 2, 3, 4, 1)
+            v = v + torch_grid_sampler_3d(vimg, grid=v + grid, align_corners=True, is_displacement=False).permute(0, 2, 3, 4, 1)
     elif dims == 2:
         for i in range(n):
             vimg = v.permute(0, 3, 1, 2)
@@ -330,8 +331,12 @@ def compute_inverse_warp_displacement(warp, grid, initial_inverse=None, iters=20
 
         for i in range(iters):
             optim.zero_grad()
-            loss = invwarp + F.grid_sample(warp.permute(*permute_vtoimg), grid + invwarp, mode='bilinear', align_corners=True).permute(*permute_imgtov)
-            loss2 = warp + F.grid_sample(invwarp.permute(*permute_vtoimg), grid + warp, mode='bilinear', align_corners=True).permute(*permute_imgtov)
+            if len(warp.shape) == 5:
+                loss = invwarp + torch_grid_sampler_3d(warp.permute(*permute_vtoimg), grid=grid + invwarp, mode='bilinear', align_corners=True, is_displacement=False).permute(*permute_imgtov)
+                loss2 = warp + torch_grid_sampler_3d(invwarp.permute(*permute_vtoimg), grid=grid + warp, mode='bilinear', align_corners=True, is_displacement=False).permute(*permute_imgtov)
+            else:
+                loss = invwarp + F.grid_sample(warp.permute(*permute_vtoimg), grid + invwarp, mode='bilinear', align_corners=True).permute(*permute_imgtov)
+                loss2 = warp + F.grid_sample(invwarp.permute(*permute_vtoimg), grid + warp, mode='bilinear', align_corners=True).permute(*permute_imgtov)
             loss = (loss**2).sum() + (loss2**2).sum()
             if debug:
                 print(f"loss: {loss.item()}")
@@ -367,8 +372,12 @@ def compute_inverse_warp_exp(warp, grid, lr=5e-3, iters=200, n=10):
         for i in pbar:
             optim.zero_grad()
             invwarp = scaling_and_squaring(vel, grid, n=n)
-            loss = invwarp + F.grid_sample(warp.permute(*permute_vtoimg), grid + invwarp, mode='bilinear', align_corners=True).permute(*permute_imgtov)
-            loss2 = warp + F.grid_sample(invwarp.permute(*permute_vtoimg), grid + warp, mode='bilinear', align_corners=True).permute(*permute_imgtov)
+            if len(warp.shape) == 5:
+                loss = invwarp + torch_grid_sampler_3d(warp.permute(*permute_vtoimg), grid=grid + invwarp, mode='bilinear', align_corners=True, is_displacement=False).permute(*permute_imgtov)
+                loss2 = warp + torch_grid_sampler_3d(invwarp.permute(*permute_vtoimg), grid=grid + warp, mode='bilinear', align_corners=True, is_displacement=False).permute(*permute_imgtov)
+            else:
+                loss = invwarp + F.grid_sample(warp.permute(*permute_vtoimg), grid + invwarp, mode='bilinear', align_corners=True).permute(*permute_imgtov)
+                loss2 = warp + F.grid_sample(invwarp.permute(*permute_vtoimg), grid + warp, mode='bilinear', align_corners=True).permute(*permute_imgtov)
             loss = (loss**2).sum() + (loss2**2).sum()
             loss.backward()
             optim.step()

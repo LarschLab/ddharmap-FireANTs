@@ -25,6 +25,8 @@ import logging
 logger = logging.getLogger(__name__)
 from fireants.registration.distributed import parallel_state
 from typing import Optional
+from fireants.interpolator.grid_sample import device_aware_interpolate
+from fireants.utils.device import empty_device_cache
 
 import os
 import logging
@@ -206,9 +208,9 @@ class WarpAdam:
                 self.exp_avg = torch.zeros(warp_size, device=self.device if not self.offload else 'cpu')
                 self.exp_avg_sq = torch.zeros(warp_size, device=self.device if not self.offload else 'cpu')
             else:
-                self.exp_avg = F.interpolate(self.exp_avg.detach().permute(*self.permute_vtoimg), size=size, mode=mode, align_corners=True, 
+                self.exp_avg = device_aware_interpolate(self.exp_avg.detach().permute(*self.permute_vtoimg), size=size, mode=mode, align_corners=True,
                                     ).permute(*self.permute_imgtov)
-                self.exp_avg_sq = F.interpolate(self.exp_avg_sq.detach().permute(*self.permute_vtoimg), size=size, mode=mode, align_corners=True, 
+                self.exp_avg_sq = device_aware_interpolate(self.exp_avg_sq.detach().permute(*self.permute_vtoimg), size=size, mode=mode, align_corners=True,
                                     ).permute(*self.permute_imgtov)
             
             # offload it back to CPU
@@ -283,7 +285,7 @@ class WarpAdam:
             # move to device
             self.exp_avg = self.exp_avg.to('cpu')
             self.exp_avg_sq = self.exp_avg_sq.to('cpu')
-            torch.cuda.empty_cache()
+            empty_device_cache(self.device)
 
         # denom = (self.exp_avg_sq / beta_correction2).sqrt().add_(self.eps)
         # get updated gradient (this will be normalized and passed in)

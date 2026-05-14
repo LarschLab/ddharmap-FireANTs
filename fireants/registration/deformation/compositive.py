@@ -33,6 +33,7 @@ from fireants.registration.optimizers.adam import WarpAdam
 from fireants.registration.optimizers.levenberg import WarpLevenbergMarquardt
 from fireants.utils.globals import MIN_IMG_SIZE
 from typing import Optional
+from fireants.interpolator.grid_sample import device_aware_interpolate
 
 from logging import getLogger
 from copy import deepcopy
@@ -126,7 +127,7 @@ class CompositiveWarp(nn.Module, AbstractDeformation):
         ''' size: [H, W, D] or [H, W] '''
         mode = 'bilinear' if self.n_dims == 2 else 'trilinear'
         # get new displacement field
-        warp = F.interpolate(self.warp.detach().permute(*self.permute_vtoimg), size=size, mode=mode, align_corners=True, 
+        warp = device_aware_interpolate(self.warp.detach().permute(*self.permute_vtoimg), size=size, mode=mode, align_corners=True,
                     ).permute(*self.permute_imgtov)
         self.register_parameter('warp', nn.Parameter(warp))
         # set new inverse displacement field

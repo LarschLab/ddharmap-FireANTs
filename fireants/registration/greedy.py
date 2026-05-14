@@ -31,6 +31,7 @@ from fireants.losses.cc import gaussian_1d, separable_filtering
 from fireants.utils.imageutils import downsample
 from fireants.utils.warputils import compositive_warp_inverse
 from fireants.interpolator import fireants_interpolator
+from fireants.interpolator.grid_sample import device_aware_interpolate
 
 import logging
 logger = logging.getLogger(__name__)
@@ -172,7 +173,7 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
         # resample if needed
         mode = "bilinear" if self.dims == 2 else "trilinear"
         if tuple(warp_inv.shape[1:-1]) != tuple(shape[2:]):
-            warp_inv = F.interpolate(warp_inv.permute(*self.warp.permute_vtoimg), size=shape[2:], mode=mode, align_corners=True).permute(*self.warp.permute_imgtov)
+            warp_inv = device_aware_interpolate(warp_inv.permute(*self.warp.permute_vtoimg), size=shape[2:], mode=mode, align_corners=True).permute(*self.warp.permute_imgtov)
 
 
         # get affine transform
@@ -235,7 +236,7 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
         mode = "bilinear" if self.dims == 2 else "trilinear"
         if tuple(warp_field.shape[1:-1]) != tuple(shape[2:]):
             # interpolate this
-            warp_field = F.interpolate(warp_field.permute(*self.warp.permute_vtoimg), size=shape[2:], mode=mode, align_corners=True).permute(*self.warp.permute_imgtov)
+            warp_field = device_aware_interpolate(warp_field.permute(*self.warp.permute_vtoimg), size=shape[2:], mode=mode, align_corners=True).permute(*self.warp.permute_imgtov)
 
         # smooth out the warp field if asked to
         if self.smooth_warp_sigma > 0:
@@ -306,10 +307,10 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
                 )
             else:
                 if scale > 1:
-                    fixed_image_down = F.interpolate(
+                    fixed_image_down = device_aware_interpolate(
                         fixed_arrays, size=size_down, mode=self.fixed_images.interpolate_mode, align_corners=True
                     )
-                    moving_image_blur = F.interpolate(
+                    moving_image_blur = device_aware_interpolate(
                         moving_arrays, size=moving_size_down, mode=self.moving_images.interpolate_mode, align_corners=True
                     )
                 else:
