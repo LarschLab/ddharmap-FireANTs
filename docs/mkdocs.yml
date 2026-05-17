@@ -16,6 +16,7 @@ nav:
     - Use moments matching with scaling: howto/moments-scaling.md
     - 2D Affine transforms for shapes: howto/subspace2d-affine.md
     - Use Levenberg-Marquardt optimizer: howto/levenberg-marquardt.md
+    - GUI full-scale findings: howto/gui-full-scale-findings.md
     - Implement custom loss functions: customloss.md
   - Advanced Reading:
     - Image representation: advanced/image.md

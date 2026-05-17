@@ -252,8 +252,10 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
         if self.smooth_warp_sigma > 0:
             warp_gaussian = [gaussian_1d(s, truncated=2) for s in (torch.zeros(self.dims, device=fixed_arrays.device, dtype=self.dtype) + self.smooth_warp_sigma)]
         # multi-scale optimization
+        self._emit_progress(event="stage_start", stage="SyN", total_iterations=sum(self.iterations))
         for scale, iters in zip(self.scales, self.iterations):
             self.convergence_monitor.reset()
+            self._emit_progress(event="scale_start", stage="SyN", scale=scale, iterations=iters)
             # notify loss function of scale change if it supports it
             if hasattr(self.loss_fn, 'set_current_scale_and_iterations'):
                 self.loss_fn.set_current_scale_and_iterations(scale, iters)
@@ -325,8 +327,13 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
                 # optimize the deformations
                 self.fwd_warp.step(loss)
                 self.rev_warp.step(loss)
-                if self.convergence_monitor.converged(loss.item()):
+                cur_loss = loss.item()
+                if self.convergence_monitor.converged(cur_loss):
+                    self._emit_progress(event="iteration", stage="SyN", scale=scale, iteration=i + 1, iterations=iters, loss=cur_loss / scale_factor, converged=True)
                     break
+                self._emit_progress(event="iteration", stage="SyN", scale=scale, iteration=i + 1, iterations=iters, loss=cur_loss / scale_factor, converged=False)
+            self._emit_progress(event="scale_complete", stage="SyN", scale=scale, iterations=iters)
+        self._emit_progress(event="stage_complete", stage="SyN")
 
 
 

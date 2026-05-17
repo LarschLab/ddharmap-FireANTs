@@ -94,13 +94,20 @@ class DeformableMixin:
         fixed_t2p = fixed_image.get_torch2phy()
 
         # get params or inverse params
+        save_kwargs = {}
+        if fixed_image.device.type == "mps":
+            target = reg.get_inverse_warp_parameters if save_inverse else reg.get_warp_parameters
+            if "interpolation_device" in target.__code__.co_varnames:
+                save_kwargs["interpolation_device"] = torch.device("cpu")
         if save_inverse:
-            moved_params = reg.get_inverse_warp_parameters(fixed_image, moving_image)   # contains affine and grid
+            moved_params = reg.get_inverse_warp_parameters(fixed_image, moving_image, **save_kwargs)   # contains affine and grid
         else:
-            moved_params = reg.get_warp_parameters(fixed_image, moving_image)   # contains affine and grid
+            moved_params = reg.get_warp_parameters(fixed_image, moving_image, **save_kwargs)   # contains affine and grid
 
         moved_coords = moved_params['grid'].detach()
         affine = moved_params['affine']
+        moving_t2p = moving_t2p.to(moved_coords.device)
+        fixed_t2p = fixed_t2p.to(moved_coords.device)
 
         if save_inverse:
             moved_coords = torch.einsum('bij, b...j->b...i', fixed_t2p[:, :reg.dims, :reg.dims], moved_coords).contiguous()  # convert to fixed space
@@ -298,4 +305,3 @@ class DeformableMixin:
                 nib.save(nib.Nifti1Image(moved_disp, np.eye(4)), savefile)
             else:
                 raise ValueError(f"Unsupported file extension: {savefile}")
-

@@ -14,7 +14,7 @@
 
 
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Any
 import torch
 from torch import nn
 from fireants.utils.util import _assert_check_scales_decreasing
@@ -31,6 +31,7 @@ from fireants.interpolator import fireants_interpolator
 from fireants.interpolator.grid_sample import device_aware_interpolate
 from fireants.io.keypoints import BatchedKeypoints
 import logging
+from fireants.registration.progress import ProgressCallback, emit_progress
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -99,6 +100,7 @@ class AbstractRegistration(ABC):
                 reduction: str = 'mean',
                 tolerance: float = 1e-6, max_tolerance_iters: int = 10,
                 progress_bar: bool = True,
+                progress_callback: ProgressCallback = None,
                 dtype: torch.dtype = torch.float32,
                 ) -> None:
         '''
@@ -130,6 +132,7 @@ class AbstractRegistration(ABC):
 
         self.dims = self.fixed_images.dims
         self.progress_bar = progress_bar        # variable to show or hide progress bar
+        self.progress_callback = progress_callback
 
         # initialize losses
         # track whether we are in masked mode; this is driven by the loss configuration
@@ -185,6 +188,10 @@ class AbstractRegistration(ABC):
 
     def print_init_msg(self):
         logger.info(f"Registration of type {self.__class__.__name__} initialized with dtype {self.dtype}")
+
+    def _emit_progress(self, **event: Any) -> None:
+        event.setdefault("registration", self.__class__.__name__)
+        emit_progress(self.progress_callback, **event)
 
     def _split_image_and_mask_last_channel(self, arrays: torch.Tensor):
         """Split arrays into (image_channels, mask_channel) if in masked mode.
@@ -348,7 +355,13 @@ class AbstractRegistration(ABC):
         return fixed_moved_image
 
 
-    def evaluate(self, fixed_images: Union[BatchedImages, torch.Tensor], moving_images: Union[BatchedImages, torch.Tensor], shape=None):
+    def evaluate(
+        self,
+        fixed_images: Union[BatchedImages, torch.Tensor],
+        moving_images: Union[BatchedImages, torch.Tensor],
+        shape=None,
+        interpolation_device: Optional[torch.device] = None,
+    ):
         '''Apply the learned transformation to new images.
 
         This method applies the registration transformation learned during optimization
@@ -383,7 +396,12 @@ class AbstractRegistration(ABC):
             moving_images = FakeBatchedImages(moving_images, self.moving_images)
 
         moving_arrays = moving_images()
-        moved_coords = self.get_warp_parameters(fixed_images, moving_images, shape=shape)
+        warp_kwargs = {}
+        if interpolation_device is not None and "interpolation_device" in self.get_warp_parameters.__code__.co_varnames:
+            warp_kwargs["interpolation_device"] = interpolation_device
+        moved_coords = self.get_warp_parameters(fixed_images, moving_images, shape=shape, **warp_kwargs)
+        if interpolation_device is not None:
+            moving_arrays = moving_arrays.to(interpolation_device)
         interpolate_mode = moving_images.get_interpolator_type()
         moved_image = fireants_interpolator(moving_arrays, **moved_coords, mode=interpolate_mode, align_corners=True)  # [N, C, H, W, [D]]
         return moved_image

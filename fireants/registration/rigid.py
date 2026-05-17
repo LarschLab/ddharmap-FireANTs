@@ -309,11 +309,13 @@ class RigidRegistration(AbstractRegistration):
         moving_p2t = self.moving_images.get_phy2torch().to(self.dtype)
         fixed_size = fixed_arrays.shape[2:]
         # save initial affine transform to initialize grid 
+        self._emit_progress(event="stage_start", stage="Rigid", total_iterations=sum(self.iterations))
 
         for scale, iters in zip(self.scales, self.iterations):
             # reset
             self.convergence_monitor.reset()
             prev_loss = np.inf
+            self._emit_progress(event="scale_start", stage="Rigid", scale=scale, iterations=iters)
             # notify loss function of scale change if it supports it
             if hasattr(self.loss_fn, 'set_current_scale_and_iterations'):
                 self.loss_fn.set_current_scale_and_iterations(scale, iters)
@@ -369,10 +371,14 @@ class RigidRegistration(AbstractRegistration):
                 # check for convergence
                 cur_loss = loss.item()
                 if self.convergence_monitor.converged(cur_loss):
+                    self._emit_progress(event="iteration", stage="Rigid", scale=scale, iteration=i + 1, iterations=iters, loss=cur_loss, converged=True)
                     break
                 prev_loss = cur_loss
+                self._emit_progress(event="iteration", stage="Rigid", scale=scale, iteration=i + 1, iterations=iters, loss=cur_loss, converged=False)
                 if self.progress_bar:
                     pbar.set_description("scale: {}, iter: {}/{}, loss: {:4f}".format(scale, i, iters, prev_loss))
+            self._emit_progress(event="scale_complete", stage="Rigid", scale=scale, iterations=iters)
+        self._emit_progress(event="stage_complete", stage="Rigid")
 
 
 if __name__ == '__main__':

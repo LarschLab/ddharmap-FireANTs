@@ -32,6 +32,7 @@ from fireants.utils.imageutils import downsample
 from fireants.utils.warputils import compositive_warp_inverse
 from fireants.interpolator import fireants_interpolator
 from fireants.interpolator.grid_sample import device_aware_interpolate
+from fireants.utils.device import empty_device_cache
 
 import logging
 logger = logging.getLogger(__name__)
@@ -154,7 +155,8 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
                                              moving_images: Union[BatchedImages, FakeBatchedImages], \
                                              smooth_warp_sigma: float = 0, smooth_grad_sigma: float = 0,
                                              use_moving_shape=True,
-                                             shape=None, displacement=False):
+                                             shape=None, displacement=False,
+                                             interpolation_device: Optional[torch.device] = None):
         ''' Get inverse warped coordinates for the moving image.
 
         This method is useful to analyse the effect of how the moving coordinates (fixed images) are transformed
@@ -169,6 +171,8 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
             shape = [moving_arrays.shape[0], 1] + list(shape) if use_moving_shape else [fixed_arrays.shape[0], 1] + list(shape)
 
         warp = self.warp.get_warp().detach().clone()
+        if interpolation_device is not None:
+            warp = warp.to(interpolation_device)
         warp_inv = compositive_warp_inverse(moving_images if use_moving_shape else fixed_images, warp, scales=self.scales, iterations=self.iterations, displacement=True)
         # resample if needed
         mode = "bilinear" if self.dims == 2 else "trilinear"
@@ -177,11 +181,12 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
 
 
         # get affine transform
-        fixed_t2p: torch.Tensor = fixed_images.get_torch2phy().to(self.dtype)
-        moving_p2t = moving_images.get_phy2torch().to(self.dtype)
+        device = warp_inv.device
+        fixed_t2p: torch.Tensor = fixed_images.get_torch2phy().to(device=device, dtype=self.dtype)
+        moving_p2t = moving_images.get_phy2torch().to(device=device, dtype=self.dtype)
 
         # save initial affine transform to initialize grid
-        affine_map_init = torch.matmul(moving_p2t, torch.matmul(self.affine, fixed_t2p))
+        affine_map_init = torch.matmul(moving_p2t, torch.matmul(self.affine.to(device), fixed_t2p))
         affine_map_inv  = torch.linalg.inv(affine_map_init)
         # get A^-1 * v[y]
         if self.dims == 2:
@@ -198,7 +203,8 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
 
     def get_warp_parameters(self, fixed_images: Union[BatchedImages, FakeBatchedImages], \
                                      moving_images: Union[BatchedImages, FakeBatchedImages], \
-                                     shape=None, displacement=False):
+                                     shape=None, displacement=False,
+                                     interpolation_device: Optional[torch.device] = None):
         """Get transformed coordinates for warping the moving image.
 
         Computes the coordinate transformation from fixed to moving image space
@@ -225,12 +231,15 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
         else:
             shape = [fixed_arrays.shape[0], 1] + list(shape)
 
-        fixed_t2p = fixed_images.get_torch2phy().to(self.dtype)
-        moving_p2t = moving_images.get_phy2torch().to(self.dtype)
+        device = interpolation_device or fixed_arrays.device
+        fixed_t2p = fixed_images.get_torch2phy().to(device=device, dtype=self.dtype)
+        moving_p2t = moving_images.get_phy2torch().to(device=device, dtype=self.dtype)
         # save initial affine transform to initialize grid
-        affine_map_init = (torch.matmul(moving_p2t, torch.matmul(self.affine, fixed_t2p))[:, :-1]).contiguous()
+        affine_map_init = (torch.matmul(moving_p2t, torch.matmul(self.affine.to(device), fixed_t2p))[:, :-1]).contiguous()
         # set affine coordinates
         warp_field = self.warp.get_warp()
+        if interpolation_device is not None:
+            warp_field = warp_field.to(interpolation_device)
 
         # resize the warp field if needed
         mode = "bilinear" if self.dims == 2 else "trilinear"
@@ -240,7 +249,7 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
 
         # smooth out the warp field if asked to
         if self.smooth_warp_sigma > 0:
-            warp_gaussian = [gaussian_1d(s, truncated=2) for s in (torch.zeros(self.dims, device=fixed_arrays.device, dtype=self.dtype) + self.smooth_warp_sigma)]
+            warp_gaussian = [gaussian_1d(s, truncated=2) for s in (torch.zeros(self.dims, device=warp_field.device, dtype=self.dtype) + self.smooth_warp_sigma)]
             warp_field = separable_filtering(warp_field.permute(*self.warp.permute_vtoimg), warp_gaussian).permute(*self.warp.permute_imgtov)
 
         # move these coordinates, and return them
@@ -276,8 +285,10 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
         # gaussian filter for smoothing the velocity field
         warp_gaussian = [gaussian_1d(s, truncated=2) for s in (torch.zeros(self.dims, device=fixed_arrays.device, dtype=self.dtype) + self.smooth_warp_sigma)]
         # multi-scale optimization
+        self._emit_progress(event="stage_start", stage="Greedy", total_iterations=sum(self.iterations))
         for scale, iters in zip(self.scales, self.iterations):
             self.convergence_monitor.reset()
+            self._emit_progress(event="scale_start", stage="Greedy", scale=scale, iterations=iters)
             # notify loss function of scale change if it supports it
             if hasattr(self.loss_fn, 'set_current_scale_and_iterations'):
                 self.loss_fn.set_current_scale_and_iterations(scale, iters)
@@ -350,8 +361,21 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
                 # optimize the velocity field
                 self.warp.step(loss)
                 # check for convergence
-                if self.convergence_monitor.converged(loss.item()):
+                cur_loss = loss.item()
+                if self.convergence_monitor.converged(cur_loss):
+                    self._emit_progress(event="iteration", stage="Greedy", scale=scale, iteration=i + 1, iterations=iters, loss=cur_loss / scale_factor, converged=True)
                     break
+                self._emit_progress(event="iteration", stage="Greedy", scale=scale, iteration=i + 1, iterations=iters, loss=cur_loss / scale_factor, converged=False)
+            self._emit_progress(event="scale_complete", stage="Greedy", scale=scale, iterations=iters)
+            del fixed_image_down, moving_image_blur
+            if "moved_image" in locals():
+                del moved_image
+            if "loss" in locals():
+                del loss
+            if "warp_field" in locals():
+                del warp_field
+            empty_device_cache(fixed_arrays)
+        self._emit_progress(event="stage_complete", stage="Greedy")
 
 
 if __name__ == '__main__':

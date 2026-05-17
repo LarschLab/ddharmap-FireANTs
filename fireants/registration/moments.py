@@ -143,42 +143,54 @@ class MomentsRegistration(AbstractRegistration):
         Args:
             scale_factor: [N, d, d] scaling matrix to incorporate when checking for best match
         '''
+        # Full-resolution 3D MPS sampling can exceed the MPS memory pool because
+        # the fallback sampler materializes several large gather tensors. Keep
+        # moment computation on the registration device, but evaluate candidate
+        # orientations on CPU where system memory can handle the temporary grids.
+        original_device = fixed_arrays.device
+        eval_device = torch.device("cpu") if original_device.type == "mps" else original_device
+        U_f_eval = U_f.to(eval_device)
+        U_m_eval = U_m.to(eval_device)
+        fixed_arrays_eval = fixed_arrays.to(eval_device)
+        moving_arrays_eval = moving_arrays.to(eval_device)
+        com_m_eval = com_m.to(eval_device)
+        xyz_f_eval = xyz_f.to(eval_device)
+        scale_factor_eval = scale_factor.to(eval_device)
         oris = np.array(oris)   # [confs, d, d]
-        oris = torch.tensor(oris, device=fixed_arrays.device).unsqueeze(1).expand(-1, self.opt_size, -1, -1)       # [confs, N, d, d]
-        oris = oris.to(U_f.dtype)
-        moving_p2t = self.moving_images.get_phy2torch().to(U_f.dtype)
+        oris = torch.tensor(oris, device=eval_device, dtype=U_f.dtype).unsqueeze(1).expand(-1, self.opt_size, -1, -1)       # [confs, N, d, d]
+        moving_p2t = self.moving_images.get_phy2torch().to(device=eval_device, dtype=U_f.dtype)
 
         # initialize best idx and best metric for each batch id
-        best_idx = torch.zeros(self.opt_size, dtype=torch.long, device=fixed_arrays.device)
-        best_metric = torch.zeros(self.opt_size, device=fixed_arrays.device, dtype=fixed_arrays.dtype) + np.inf
+        best_idx = torch.zeros(self.opt_size, dtype=torch.long, device=eval_device)
+        best_metric = torch.zeros(self.opt_size, device=eval_device, dtype=fixed_arrays.dtype) + np.inf
 
         # for each orientation, compute R, t and find best metric
         for ori_id, ori in enumerate(oris):
             # compute R with scale_factor: R = (U_f @ ori @ scale_factor @ U_m)^T
-            R = (U_f @ ori @ scale_factor @ U_m).to(fixed_arrays.device)   # [N, d, d]
+            R = (U_f_eval @ ori @ scale_factor_eval @ U_m_eval).to(eval_device)   # [N, d, d]
             R = R.transpose(-1, -2)
-            moved_coords_m = torch.einsum('ntd, n...d->n...t', R, xyz_f) + com_m[:, None]  # [N, S, d]
+            moved_coords_m = torch.einsum('ntd, n...d->n...t', R, xyz_f_eval) + com_m_eval[:, None]  # [N, S, d]
             moved_coords_m = torch.einsum('ntd, n...d->n...t', moving_p2t[:, :-1, :-1], moved_coords_m) + moving_p2t[:, :-1, -1].unsqueeze(1)
             # moved_coords_m is now of size [N, S, dims] -> revert it back to [N, H, W, D, dims]
-            moved_coords_m = moved_coords_m.view(-1, *fixed_arrays.shape[2:], self.dims)
+            moved_coords_m = moved_coords_m.view(-1, *fixed_arrays_eval.shape[2:], self.dims)
             # sample moving image?!
-            if moving_arrays.ndim == 5:
+            if moving_arrays_eval.ndim == 5:
                 moved_image = torch_grid_sampler_3d(
-                    moving_arrays,
-                    grid=moved_coords_m.to(moving_arrays.dtype),
+                    moving_arrays_eval,
+                    grid=moved_coords_m.to(moving_arrays_eval.dtype),
                     mode='bilinear',
                     align_corners=True,
                     is_displacement=False,
                 )
             else:
-                moved_image = F.grid_sample(moving_arrays, moved_coords_m.to(moving_arrays.dtype), mode='bilinear', align_corners=True)
-            loss_val = self.loss_fn(moved_image, fixed_arrays).flatten(1).sum(1)
+                moved_image = F.grid_sample(moving_arrays_eval, moved_coords_m.to(moving_arrays_eval.dtype), mode='bilinear', align_corners=True)
+            loss_val = self.loss_fn(moved_image, fixed_arrays_eval).flatten(1).sum(1)
             index = torch.where(loss_val < best_metric)[0]
             best_metric[index] = loss_val[index]
             best_idx[index] = ori_id
         
         # get best orientation  # [N, 3, 3]
-        ori = oris[best_idx, 0]
+        ori = oris[best_idx, 0].to(original_device)
         return ori
 
     def downsample_images(self, fixed_arrays, moving_arrays):
@@ -428,8 +440,11 @@ class MomentsRegistration(AbstractRegistration):
             print("Already optimized parameters. Use other functions to get transformed values.")
             return
         # optimize
+        self._emit_progress(event="stage_start", stage="Moments", total_iterations=1)
         self.optimize_helper()
+        self._emit_progress(event="iteration", stage="Moments", scale=self.scales[0], iteration=1, iterations=1, converged=False)
         self.optimized = True
+        self._emit_progress(event="stage_complete", stage="Moments")
 
 
 if __name__ == '__main__':

@@ -245,10 +245,12 @@ class AffineRegistration(AbstractRegistration):
         moving_p2t = self.moving_images.get_phy2torch().to(self.dtype)
         fixed_size = fixed_arrays.shape[2:]
         # save initial affine transform to initialize grid 
+        self._emit_progress(event="stage_start", stage="Affine", total_iterations=sum(self.iterations))
 
         for scale, iters in zip(self.scales, self.iterations):
             self.convergence_monitor.reset()
             prev_loss = np.inf
+            self._emit_progress(event="scale_start", stage="Affine", scale=scale, iterations=iters)
             # notify loss function of scale change if it supports it
             if hasattr(self.loss_fn, 'set_current_scale_and_iterations'):
                 self.loss_fn.set_current_scale_and_iterations(scale, iters)
@@ -302,10 +304,22 @@ class AffineRegistration(AbstractRegistration):
                 # check for convergence
                 cur_loss = loss.item()
                 if self.convergence_monitor.converged(cur_loss):
+                    self._emit_progress(event="iteration", stage="Affine", scale=scale, iteration=i + 1, iterations=iters, loss=cur_loss, converged=True)
                     break
                 prev_loss = cur_loss
+                self._emit_progress(event="iteration", stage="Affine", scale=scale, iteration=i + 1, iterations=iters, loss=cur_loss, converged=False)
                 if verbose:
                     pbar.set_description("scale: {}, iter: {}/{}, loss: {:4f}".format(scale, i, iters, prev_loss))
+            self._emit_progress(event="scale_complete", stage="Affine", scale=scale, iterations=iters)
+            del fixed_image_down, moving_image_blur
+            if "moved_image" in locals():
+                del moved_image
+            if "loss" in locals():
+                del loss
+            if "affinemat" in locals():
+                del affinemat
+            empty_device_cache(fixed_arrays)
+        self._emit_progress(event="stage_complete", stage="Affine")
 
 
 if __name__ == '__main__':

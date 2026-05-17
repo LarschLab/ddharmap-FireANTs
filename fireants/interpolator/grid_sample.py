@@ -69,11 +69,47 @@ def _mps_grid_sample_3d(
     mode: str = "bilinear",
     padding_mode: str = "zeros",
     align_corners: bool = True,
+    max_chunk_voxels: int = 256_000,
 ) -> torch.Tensor:
     if mode not in ("bilinear", "trilinear", "nearest"):
         raise NotImplementedError(f"MPS 3D grid sampler does not support mode={mode}")
     if padding_mode not in ("zeros", "border"):
         raise NotImplementedError(f"MPS 3D grid sampler does not support padding_mode={padding_mode}")
+
+    out_voxels = grid.shape[0] * grid.shape[1] * grid.shape[2] * grid.shape[3]
+    if out_voxels > max_chunk_voxels:
+        voxels_per_z = max(grid.shape[0] * grid.shape[2] * grid.shape[3], 1)
+        chunk_depth = max(max_chunk_voxels // voxels_per_z, 1)
+        if chunk_depth < grid.shape[1]:
+            chunks = []
+            for start in range(0, grid.shape[1], chunk_depth):
+                chunks.append(
+                    _mps_grid_sample_3d(
+                        input,
+                        grid[:, start : start + chunk_depth],
+                        mode=mode,
+                        padding_mode=padding_mode,
+                        align_corners=align_corners,
+                        max_chunk_voxels=max_chunk_voxels,
+                    )
+                )
+            return torch.cat(chunks, dim=2)
+        voxels_per_y = max(grid.shape[0] * grid.shape[1] * grid.shape[3], 1)
+        chunk_height = max(max_chunk_voxels // voxels_per_y, 1)
+        if chunk_height < grid.shape[2]:
+            chunks = []
+            for start in range(0, grid.shape[2], chunk_height):
+                chunks.append(
+                    _mps_grid_sample_3d(
+                        input,
+                        grid[:, :, start : start + chunk_height],
+                        mode=mode,
+                        padding_mode=padding_mode,
+                        align_corners=align_corners,
+                        max_chunk_voxels=max_chunk_voxels,
+                    )
+                )
+            return torch.cat(chunks, dim=3)
 
     B, C, Z, Y, X = input.shape
     gx, gy, gz = grid.unbind(-1)

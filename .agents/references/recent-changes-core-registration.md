@@ -16,6 +16,30 @@ Purpose: append completed meaningful core registration work.
 
 ## Log
 
+## 2026-05-17 - full-default GUI gate memory findings
+
+- Slice goal: run the realistic GUI-default profile on full NRRD bridge data and fix owner-layer MPS memory blockers uncovered by the gate.
+- Passes completed: routed MPS moments orientation sampling through CPU, chunked MPS 3D grid sampling over Z/Y tiles, and released affine/Greedy per-scale tensors before cache clearing.
+- What changed: MPS full-resolution sampling no longer materializes whole-volume trilinear gather tensors; affine/Greedy scale transitions release previous scale tensors explicitly.
+- Rerun implications: MPS can progress farther into full-default runs, but full-resolution CC loss still exceeds the 16 GiB machine's MPS memory ceiling; CPU full-default gate completed and exposed registration-quality degradation.
+- Validation performed: `python -m pytest -q tests/test_gui_runner.py`; CPU one-pair full-default gate under `/Users/ddharmap/dataProcessing/testReg/fireants_gui_full_defaults_cpu_gate_20260517_160057`.
+
+## 2026-05-17 - MPS full-resolution GUI output fallback
+
+- Slice goal: unblock full-size GUI bridge output writing after MPS registration exposes device-memory limits.
+- Passes completed: fixed MPS float64 orientation tensors in moments registration and added CPU interpolation fallback hooks for Greedy transform save/evaluate output paths.
+- What changed: `MomentsRegistration` creates orientation candidates in the active float dtype; `AbstractRegistration.evaluate` and `GreedyRegistration.get_warp_parameters` accept an optional interpolation device for explicit output-time fallback.
+- Rerun implications: MPS registration can still optimize on MPS while full-resolution transform saving and output warping can be routed through CPU by callers that need it.
+- Validation performed: `python -m pytest -q tests/test_gui_runner.py`; one-pair and two-pair MPS reduced real-data probes with fixed-space NRRD outputs.
+
+## 2026-05-17 - registration progress callbacks
+
+- Slice goal: allow user-facing workflows to report per-stage and per-iteration registration progress without changing optimization semantics.
+- Passes completed: added optional callback plumbing through `AbstractRegistration` and emitted stage/scale/iteration events from moments, rigid, affine, Greedy, and SyN registration.
+- What changed: registration constructors now accept `progress_callback` via existing kwargs paths while preserving current `progress_bar` behavior.
+- Rerun implications: UI and orchestration code can consume callback events instead of parsing `tqdm` text.
+- Validation performed: `python -m pytest -q tests/test_gui_runner.py`.
+
 ## 2026-05-14 - stock PyTorch MPS loss coverage
 
 - Slice goal: keep MPS enablement on stock PyTorch and cover the historical 3D conv blocker through FireANTs loss code.

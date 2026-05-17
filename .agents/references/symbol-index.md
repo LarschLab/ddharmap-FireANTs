@@ -22,13 +22,13 @@ Use this file when a task changes public surface, docs references, imports, or o
 
 ## Registration
 
-- `fireants.registration.abstract.AbstractRegistration`: shared lifecycle, loss selection, masked mode, downsampling, convergence, and evaluation contract.
+- `fireants.registration.abstract.AbstractRegistration`: shared lifecycle, loss selection, masked mode, downsampling, convergence, optional progress callbacks, and evaluation contract; `evaluate(..., interpolation_device=...)` may route output interpolation to a safer device.
 - `fireants.registration.moments.MomentsRegistration`: physical-space initial alignment.
 - `fireants.registration.rigid.RigidRegistration`: quaternion-based rigid registration.
 - `fireants.registration.legacyrigid.RigidRegistration`: legacy rigid implementation kept for compatibility.
 - `fireants.registration.affine.AffineRegistration`: affine registration.
 - `fireants.registration.subspace2daffine.Subspace2DAffineRegistration`: 2D shape/subspace affine registration.
-- `fireants.registration.greedy.GreedyRegistration`: greedy deformable registration.
+- `fireants.registration.greedy.GreedyRegistration`: greedy deformable registration; supports save/evaluate interpolation-device override for MPS full-resolution output fallbacks.
 - `fireants.registration.syn.SyNRegistration`: symmetric deformable registration.
 - `fireants.registration.distributedgreedy.DistributedGreedyRegistration`: distributed deformable registration.
 - `fireants.registration.optimizers.WarpAdam`, `WarpSGD`, `WarpLevenbergMarquardt`: warp optimizers.
@@ -41,12 +41,14 @@ Use this file when a task changes public surface, docs references, imports, or o
 - `fireants.losses.fusedcc.FusedLocalNormalizedCrossCorrelationLoss`: fused CC wrapper.
 - `fireants.losses.fusedmi.FusedGlobalMutualInformationLoss`: fused MI wrapper.
 - `fireants.interpolator.fireants_interpolator`: singleton `GridSampleDispatcher` for sampling, warp composition, and affine warp.
-- `fireants.interpolator.grid_sample.device_aware_interpolate`: PyTorch-compatible resize helper that routes MPS 3D trilinear interpolation through the FireANTs sampler fallback.
+- `fireants.interpolator.grid_sample.device_aware_interpolate`: PyTorch-compatible resize helper that routes MPS 3D trilinear interpolation through the chunked FireANTs sampler fallback.
 - `fireants.utils.device`: small cache, synchronization, and memory helpers for CUDA, MPS, and CPU-safe callers.
 
 ## Entrypoints
 
 - `cli/fireantsRegistration`: ANTs-like command-line registration wrapper.
+- `fireants.gui.runner.run_batch_registration`: reusable bridge-stack batch runner for GUI workflows; registers moving bridge images to one fixed bridge image, applies the final transform to selected moving-side files, and can emit JSONL/CSV benchmark metrics through `RegistrationSettings.metrics_dir`.
+- `fireants.gui.app`: optional PySide6 desktop GUI entrypoint exposed as `fireants-gui`.
 - `fireants/scripts/template/build_template.py`: template-building command entrypoint.
 - `fireants/scripts/template/registration_pipeline.py::register_batch`: per-batch template registration pipeline.
 - `fireants/scripts/template/template_helpers.py`: template output, averaging, shape averaging, and config helpers.
