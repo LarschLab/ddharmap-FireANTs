@@ -16,6 +16,14 @@ Purpose: append completed meaningful core registration work.
 
 ## Log
 
+## 2026-05-17 - MPS moments determinant fallback
+
+- Slice goal: keep GUI runner MPS smoke coverage on stock PyTorch without relying on global CPU fallback.
+- Passes completed: routed the small Moments rotation determinant calculation through CPU when tensors are on MPS.
+- What changed: `MomentsRegistration` avoids the unsupported stock-MPS `torch.linalg.det` path while preserving the resulting determinant value and device placement.
+- Rerun implications: fallback-free MPS runs can progress past the Moments determinant blocker; larger runs may still hit later memory limits.
+- Validation performed: `python -m pytest -q tests/test_gui_runner.py`.
+
 ## 2026-05-17 - full-default GUI gate memory findings
 
 - Slice goal: run the realistic GUI-default profile on full NRRD bridge data and fix owner-layer MPS memory blockers uncovered by the gate.

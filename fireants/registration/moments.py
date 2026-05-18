@@ -379,7 +379,11 @@ class MomentsRegistration(AbstractRegistration):
             # transpose U_m since the solution is U_f * U_m^T
             U_m = U_m.transpose(-1, -2).to(U_f.device)
             # calculate det
-            det = torch.linalg.det(torch.einsum('nij, njk->nik', U_f, U_m))  # N
+            det_input = torch.einsum('nij, njk->nik', U_f, U_m)
+            if det_input.device.type == "mps":
+                det = torch.linalg.det(det_input.cpu()).to(det_input.device)
+            else:
+                det = torch.linalg.det(det_input)  # N
             detmat = torch.eye(self.dims, device=self.fixed_images.device, dtype=self.dtype).unsqueeze(0).repeat(self.opt_size, 1, 1)
             detmat[:, -1, -1] = det.to(self.dtype)
             U_f = U_f @ detmat

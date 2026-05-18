@@ -33,6 +33,12 @@ Output root:
 /Users/ddharmap/dataProcessing/testReg
 ```
 
+The 24 GB M4 Pro rerun used the same f01 fixed/moving data mirrored under:
+
+```text
+/Volumes/dataDrive/dataProcessing/FireANTs
+```
+
 ## Profiles Tested
 
 ### Reduced Debug Profile
@@ -86,6 +92,21 @@ greedy_iterations = [100, 50, 25]
 ```
 
 This is 351 registration iterations per moving bridge, plus transform save and moving-image warp.
+
+### GUI Profile Controls
+
+The GUI now exposes registration-profile presets plus editable advanced settings. It still opens on `Current Full` for compatibility with earlier behavior, but profile tuning should usually start with `Memory Saver` on MPS hardware:
+
+```python
+loss_type = "mse"
+moments_scale = 8
+affine_scales = [4, 2, 1]
+affine_iterations = [50, 25, 10]
+greedy_scales = [4, 2]
+greedy_iterations = [50, 25]
+```
+
+The `Debug` preset keeps the earlier reduced one-iteration coarse profile for quick wiring checks. The GUI also has live magenta/green overlay previews after Moments and after each Affine/Greedy scale, so users can inspect whether the moving bridge is converging toward the fixed bridge before waiting for final output files.
 
 ## Memory Findings
 
@@ -178,6 +199,80 @@ However, the registration-quality proxy metrics worsened:
 
 Conclusion: the pipeline mechanics can complete on CPU, but the current GUI-default registration profile is not a good quality profile for this dataset.
 
+## 24 GB M4 Pro Full-Default Gate
+
+The same one-pair CRHA gate was rerun on a 24 GB Apple M4 Pro using `device="mps"` and the GUI-default `cc` profile.
+
+Preflight:
+
+- Machine: Apple M4 Pro, `24 GiB` unified memory.
+- PyTorch: `2.6.0`.
+- MPS available: `True`.
+- CUDA available: `False`.
+- Fixed/moving/payload image geometry matched the f01 data recorded above.
+
+### Plain MPS Attempt
+
+Artifact:
+
+```text
+/Volumes/dataDrive/dataProcessing/FireANTs/testReg/fireants_gui_full_defaults_mps_24gb_gate_20260517_172205
+```
+
+Result:
+
+- Failed during Moments before reaching memory-heavy registration stages.
+- `row_complete` and `batch_complete` were not emitted.
+- No transform or warped outputs were written.
+
+Failure:
+
+```text
+The operator 'aten::_linalg_det.result' is not currently implemented for the MPS device.
+```
+
+This is a stock PyTorch MPS backend coverage issue in the moments rotation determinant path, not a full-scale memory result.
+
+### MPS with PyTorch CPU Fallback
+
+To continue the hardware gate past the unsupported determinant op, the same run was repeated with:
+
+```bash
+PYTORCH_ENABLE_MPS_FALLBACK=1
+```
+
+Artifact:
+
+```text
+/Volumes/dataDrive/dataProcessing/FireANTs/testReg/fireants_gui_full_defaults_mps_24gb_gate_fallback_20260517_172337
+```
+
+Result:
+
+- Moments completed.
+- Affine completed, including full-resolution scale `1`.
+- Greedy completed scales `4` and `2`.
+- The run failed entering Greedy full-resolution scale `1`.
+- `row_complete` and `batch_complete` were not emitted.
+- No transform or warped outputs were written, so no final proxy metrics or output-geometry checks were available.
+
+Stage times:
+
+| Stage | Seconds |
+| --- | ---: |
+| Moments | `21.71` |
+| Affine | `585.27` |
+| Greedy | incomplete; failed entering scale `1` |
+| Total before failure | `712.46` |
+
+Failure:
+
+```text
+MPS backend out of memory (MPS allocated: 5.77 GB, other allocations: 23.50 GB, max allowed: 30.19 GB). Tried to allocate 1.18 GB on private pool.
+```
+
+Conclusion: 24 GB unified memory gets farther than the 16 GB machine and clears the previous full-resolution Affine barrier, but it still cannot complete the GUI-default full-scale `cc` profile for this pair on MPS. The next blocker is the Greedy scale `1` transition.
+
 ## Hardware Expectations
 
 ### 16 GB Mac with MPS
@@ -186,9 +281,7 @@ Not enough for GUI-default full-resolution `cc` on this data. Reduced/coarse pro
 
 ### 24 GB M4 Pro
 
-Likely better, but not guaranteed.
-
-The observed MPS failures were near the memory ceiling rather than orders of magnitude beyond it, so 24 GB may get past the specific affine-scale-1 failure. The Greedy full-resolution stage may still hit another peak. A one-pair full-default gate should be run before attempting both moving bridges.
+Tested on the one-pair CRHA gate. With `PYTORCH_ENABLE_MPS_FALLBACK=1`, 24 GB gets past the Affine scale `1` failure seen on the 16 GB machine, but still fails entering Greedy scale `1` with MPS out of memory. The Moments determinant calculation has since been routed through CPU on MPS, so fallback-free reruns can get past that specific unsupported-op blocker.
 
 ### 32 GB+ Unified Memory
 
@@ -217,6 +310,25 @@ Likely tuning directions:
 - Use `moments_scale > 1` for initialization if full-resolution moments is too costly.
 - Compare affine-only versus affine plus Greedy to isolate where quality degrades.
 - Add visual slice overlays or downsampled QA images next to numeric metrics.
+- Re-run fallback-free MPS gates after profile tuning to confirm the next remaining blocker.
+
+## Memory-Reduction Strategies to Revisit
+
+Recommended first experiments:
+
+1. Start from the GUI `Memory Saver` preset, which keeps full-resolution Affine but skips full-resolution Greedy on MPS by using Greedy scales `[4, 2]`, then still writes final warped outputs in fixed-image space.
+2. Try cheaper full-resolution losses: use `mse`, a smaller CC kernel, or a hybrid profile with `cc` at coarse scales and a cheaper final stage.
+3. Test Greedy Adam with `optimizer_params={"reset": True}` so optimizer state is reinitialized instead of interpolated between scales.
+4. Test Greedy with `optimizer="SGD"` to avoid Adam's two full-size state tensors.
+5. Test Greedy Adam with `optimizer_params={"offload": True}` to keep optimizer state on CPU when MPS memory is tight.
+
+Implementation ideas if profile tuning is not enough:
+
+- Reduce the MPS 3D interpolation peak by writing chunked results into a preallocated output tensor instead of collecting chunks and concatenating them.
+- Add stronger cleanup before scale transitions: delete previous-scale images, warp temporaries, loss tensors, and optimizer buffers before clearing/synchronizing MPS cache.
+- Route optimizer-state resize operations through CPU on MPS when the alternative is exceeding the private MPS memory pool.
+
+Quality caveat: the CPU full-default gate completed but degraded proxy metrics, so lower-memory profiles must be judged by both completion and registration quality.
 
 ## Useful Commands
 
@@ -251,4 +363,3 @@ print(fixed.GetSize(), warped.GetSize())
 print(fixed.GetSpacing(), warped.GetSpacing())
 print(warp.GetSize(), warp.GetNumberOfComponentsPerPixel())
 ```
-

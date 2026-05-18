@@ -8,13 +8,25 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 import SimpleITK as sitk
 import torch
 
-from fireants.gui.runner import RegistrationJob, RegistrationSettings, run_batch_registration
+from fireants.gui.runner import (
+    REGISTRATION_PROFILE_NAMES,
+    SUPPORTED_GREEDY_OPTIMIZERS,
+    SUPPORTED_LOSS_TYPES,
+    SUPPORTED_MOMENTS_ORIENTATIONS,
+    RegistrationJob,
+    RegistrationSettings,
+    parse_float_list,
+    parse_int_list,
+    registration_settings_for_profile,
+    run_batch_registration,
+    validate_registration_settings,
+)
 
 try:
     from PySide6.QtCore import QObject, QSettings, Qt, QThread, Signal
@@ -23,6 +35,9 @@ try:
         QApplication,
         QFileDialog,
         QFormLayout,
+        QCheckBox,
+        QComboBox,
+        QGroupBox,
         QHBoxLayout,
         QLabel,
         QLineEdit,
@@ -32,8 +47,10 @@ try:
         QMessageBox,
         QPushButton,
         QProgressBar,
+        QScrollArea,
         QSplitter,
         QStatusBar,
+        QTabWidget,
         QToolBar,
         QVBoxLayout,
         QWidget,
@@ -50,6 +67,7 @@ class GuiJob:
     moving_bridge: Path
     warp_files: List[Path] = field(default_factory=list)
     status: str = "Queued"
+    live_preview: Optional[QPixmap] = None
 
     def display_text(self) -> str:
         return f"{self.status} | {self.moving_bridge.name} | warp files: {len(self.all_warp_files())}"
@@ -107,6 +125,7 @@ class MainWindow(QMainWindow):
         self.jobs: List[GuiJob] = []
         self.worker_thread = None
         self.worker = None
+        self._loading_profile_fields = False
         self._build_ui()
         self._restore_settings()
         self._set_running(False)
@@ -143,40 +162,97 @@ class MainWindow(QMainWindow):
 
         root = QWidget()
         root_layout = QVBoxLayout(root)
+        root_layout.setContentsMargins(8, 6, 8, 6)
+        root_layout.setSpacing(6)
 
-        controls = QFormLayout()
         self.fixed_path_edit = QLineEdit()
         self.fixed_path_edit.setReadOnly(True)
         self.output_path_edit = QLineEdit()
         self.output_path_edit.setReadOnly(True)
         self.device_edit = QLineEdit(default_device())
-        choose_output = QPushButton("Choose Output")
+        self.device_edit.setMaximumWidth(150)
+        choose_fixed = QPushButton("Browse")
+        choose_fixed.clicked.connect(self.choose_fixed_bridge)
+        choose_output = QPushButton("Browse")
         choose_output.clicked.connect(self.choose_output_dir)
+        self.advanced_profile_button = QPushButton("Advanced")
+        self.advanced_profile_button.clicked.connect(self.show_profile_tab)
+        self.profile_combo = QComboBox()
+        self.profile_combo.addItems(REGISTRATION_PROFILE_NAMES)
+        self.profile_combo.currentTextChanged.connect(self.apply_profile_preset)
+
+        fixed_row = QHBoxLayout()
+        fixed_row.addWidget(QLabel("Fixed"))
+        fixed_row.addWidget(self.fixed_path_edit, 1)
+        fixed_row.addWidget(choose_fixed)
         output_row = QHBoxLayout()
+        output_row.addWidget(QLabel("Output"))
         output_row.addWidget(self.output_path_edit, 1)
         output_row.addWidget(choose_output)
-        controls.addRow("Fixed bridge", self.fixed_path_edit)
-        controls.addRow("Output folder", output_row)
-        controls.addRow("Device", self.device_edit)
-        root_layout.addLayout(controls)
+        output_row.addWidget(QLabel("Device"))
+        output_row.addWidget(self.device_edit)
+        profile_row = QHBoxLayout()
+        profile_row.addWidget(QLabel("Profile"))
+        profile_row.addWidget(self.profile_combo, 1)
+        profile_row.addWidget(self.advanced_profile_button)
+        root_layout.addLayout(fixed_row)
+        root_layout.addLayout(output_row)
+        root_layout.addLayout(profile_row)
+
+        self.loss_combo = QComboBox()
+        self.loss_combo.addItems(SUPPORTED_LOSS_TYPES)
+        self.cc_kernel_edit = QLineEdit()
+        self.moments_scale_edit = QLineEdit()
+        self.moments_order_edit = QLineEdit()
+        self.moments_orientation_combo = QComboBox()
+        self.moments_orientation_combo.addItems(SUPPORTED_MOMENTS_ORIENTATIONS)
+        self.affine_scales_edit = QLineEdit()
+        self.affine_iterations_edit = QLineEdit()
+        self.affine_lr_edit = QLineEdit()
+        self.greedy_scales_edit = QLineEdit()
+        self.greedy_iterations_edit = QLineEdit()
+        self.greedy_lr_edit = QLineEdit()
+        self.greedy_optimizer_combo = QComboBox()
+        self.greedy_optimizer_combo.addItems(SUPPORTED_GREEDY_OPTIMIZERS)
+        self.greedy_reset_check = QCheckBox("Reset")
+        self.greedy_offload_check = QCheckBox("Offload")
+        self.greedy_flags_widget = QWidget()
+        greedy_flags = QHBoxLayout(self.greedy_flags_widget)
+        greedy_flags.setContentsMargins(0, 0, 0, 0)
+        greedy_flags.addWidget(self.greedy_reset_check)
+        greedy_flags.addWidget(self.greedy_offload_check)
+        greedy_flags.addStretch(1)
+        self.smooth_warp_sigma_edit = QLineEdit()
+        self.smooth_grad_sigma_edit = QLineEdit()
+        self.preview_max_side_edit = QLineEdit()
+        self.preview_enabled_check = QCheckBox("Enabled")
+        self._set_compact_profile_field_widths()
+        self.profile_widgets = [
+            self.profile_combo,
+            self.advanced_profile_button,
+            self.loss_combo,
+            self.cc_kernel_edit,
+            self.moments_scale_edit,
+            self.moments_order_edit,
+            self.moments_orientation_combo,
+            self.affine_scales_edit,
+            self.affine_iterations_edit,
+            self.affine_lr_edit,
+            self.greedy_scales_edit,
+            self.greedy_iterations_edit,
+            self.greedy_lr_edit,
+            self.greedy_optimizer_combo,
+            self.greedy_reset_check,
+            self.greedy_offload_check,
+            self.smooth_warp_sigma_edit,
+            self.smooth_grad_sigma_edit,
+            self.preview_enabled_check,
+            self.preview_max_side_edit,
+        ]
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.job_list = QListWidget()
-        self.job_list.currentRowChanged.connect(self.update_preview)
-        splitter.addWidget(self.job_list)
-
-        preview = QWidget()
-        preview_layout = QHBoxLayout(preview)
-        self.moving_preview = QLabel("No moving bridge selected")
-        self.fixed_preview = QLabel("No fixed bridge selected")
-        for label in (self.moving_preview, self.fixed_preview):
-            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            label.setMinimumSize(360, 360)
-            label.setStyleSheet("QLabel { background: #101418; color: #d9e2ec; border: 1px solid #323b44; }")
-            label.setScaledContents(False)
-        preview_layout.addWidget(self.moving_preview, 1)
-        preview_layout.addWidget(self.fixed_preview, 1)
-        splitter.addWidget(preview)
+        splitter.addWidget(self._build_sidebar())
+        splitter.addWidget(self._build_preview_area())
         splitter.setSizes([330, 850])
         root_layout.addWidget(splitter, 1)
 
@@ -192,6 +268,131 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(root)
         self.setStatusBar(QStatusBar())
 
+    def _build_sidebar(self) -> QWidget:
+        self.sidebar_tabs = QTabWidget()
+        self.sidebar_tabs.setMinimumWidth(300)
+        self.sidebar_tabs.setMaximumWidth(380)
+
+        queue_tab = QWidget()
+        queue_layout = QVBoxLayout(queue_tab)
+        queue_layout.setContentsMargins(8, 8, 8, 8)
+        self.job_list = QListWidget()
+        self.job_list.currentRowChanged.connect(self.update_preview)
+        queue_layout.addWidget(self.job_list, 1)
+        self.attach_payload_button = QPushButton("Attach warp files")
+        self.attach_payload_button.clicked.connect(self.attach_warp_files)
+        queue_layout.addWidget(self.attach_payload_button)
+        self.sidebar_tabs.addTab(queue_tab, "Queue")
+
+        profile_scroll = QScrollArea()
+        profile_scroll.setWidgetResizable(True)
+        profile_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        profile_body = QWidget()
+        profile_layout = QVBoxLayout(profile_body)
+        profile_layout.setContentsMargins(8, 8, 8, 8)
+        profile_layout.setSpacing(8)
+        profile_layout.addWidget(self._profile_group("Loss", [("Type", self.loss_combo), ("CC kernel", self.cc_kernel_edit)]))
+        profile_layout.addWidget(
+            self._profile_group(
+                "Moments",
+                [
+                    ("Scale", self.moments_scale_edit),
+                    ("Order", self.moments_order_edit),
+                    ("Orientation", self.moments_orientation_combo),
+                ],
+            )
+        )
+        profile_layout.addWidget(
+            self._profile_group(
+                "Affine",
+                [
+                    ("Scales", self.affine_scales_edit),
+                    ("Iterations", self.affine_iterations_edit),
+                    ("LR", self.affine_lr_edit),
+                ],
+            )
+        )
+        profile_layout.addWidget(
+            self._profile_group(
+                "Greedy",
+                [
+                    ("Scales", self.greedy_scales_edit),
+                    ("Iterations", self.greedy_iterations_edit),
+                    ("LR", self.greedy_lr_edit),
+                    ("Optimizer", self.greedy_optimizer_combo),
+                    ("Adam state", self.greedy_flags_widget),
+                ],
+            )
+        )
+        profile_layout.addWidget(
+            self._profile_group(
+                "Preview",
+                [
+                    ("Live", self.preview_enabled_check),
+                    ("Max side", self.preview_max_side_edit),
+                    ("Warp sigma", self.smooth_warp_sigma_edit),
+                    ("Grad sigma", self.smooth_grad_sigma_edit),
+                ],
+            )
+        )
+        profile_layout.addStretch(1)
+        profile_scroll.setWidget(profile_body)
+        self.sidebar_tabs.addTab(profile_scroll, "Profile")
+        return self.sidebar_tabs
+
+    def _profile_group(self, title: str, rows: List[tuple]) -> QGroupBox:
+        group = QGroupBox(title)
+        layout = QFormLayout(group)
+        layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        for label, widget in rows:
+            layout.addRow(label, widget)
+        return group
+
+    def _set_compact_profile_field_widths(self) -> None:
+        for widget in (
+            self.loss_combo,
+            self.cc_kernel_edit,
+            self.moments_scale_edit,
+            self.moments_order_edit,
+            self.moments_orientation_combo,
+            self.affine_scales_edit,
+            self.affine_iterations_edit,
+            self.affine_lr_edit,
+            self.greedy_scales_edit,
+            self.greedy_iterations_edit,
+            self.greedy_lr_edit,
+            self.greedy_optimizer_combo,
+            self.smooth_warp_sigma_edit,
+            self.smooth_grad_sigma_edit,
+            self.preview_max_side_edit,
+        ):
+            widget.setMinimumWidth(80)
+
+    def _build_preview_area(self) -> QWidget:
+        preview = QWidget()
+        preview_layout = QVBoxLayout(preview)
+        preview_layout.setContentsMargins(8, 0, 0, 0)
+        title_row = QHBoxLayout()
+        title_row.addWidget(QLabel("Moving / live overlay"))
+        title_row.addStretch(1)
+        title_row.addWidget(QLabel("Fixed"))
+        preview_layout.addLayout(title_row)
+
+        preview_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.moving_preview = QLabel("No moving bridge selected")
+        self.fixed_preview = QLabel("No fixed bridge selected")
+        for label in (self.moving_preview, self.fixed_preview):
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            label.setMinimumSize(220, 220)
+            label.setStyleSheet("QLabel { background: #101418; color: #d9e2ec; border: 1px solid #323b44; }")
+            label.setScaledContents(False)
+        preview_splitter.addWidget(self.moving_preview)
+        preview_splitter.addWidget(self.fixed_preview)
+        preview_splitter.setSizes([1, 1])
+        preview_layout.addWidget(preview_splitter, 1)
+        return preview
+
     def _restore_settings(self) -> None:
         fixed = self.settings_store.value("fixed_bridge", "")
         output = self.settings_store.value("output_dir", "")
@@ -199,7 +400,114 @@ class MainWindow(QMainWindow):
             self.fixed_path_edit.setText(str(fixed))
         if output:
             self.output_path_edit.setText(str(output))
+        try:
+            self._restore_profile_settings()
+        except ValueError:
+            self.profile_combo.setCurrentText(REGISTRATION_PROFILE_NAMES[0])
+            self._apply_settings_to_fields(registration_settings_for_profile(REGISTRATION_PROFILE_NAMES[0]))
         self.update_preview()
+
+    def _restore_profile_settings(self) -> None:
+        profile_name = str(self.settings_store.value("profile/name", REGISTRATION_PROFILE_NAMES[0]))
+        if profile_name not in REGISTRATION_PROFILE_NAMES:
+            profile_name = REGISTRATION_PROFILE_NAMES[0]
+        settings = registration_settings_for_profile(profile_name)
+        settings.loss_type = str(self.settings_store.value("profile/loss_type", settings.loss_type))
+        settings.cc_kernel_size = int(self.settings_store.value("profile/cc_kernel_size", settings.cc_kernel_size))
+        settings.moments_scale = float(self.settings_store.value("profile/moments_scale", settings.moments_scale))
+        settings.moments_order = int(self.settings_store.value("profile/moments_order", settings.moments_order))
+        settings.moments_orientation = str(self.settings_store.value("profile/moments_orientation", settings.moments_orientation))
+        settings.affine_scales = parse_float_list(str(self.settings_store.value("profile/affine_scales", _format_number_list(settings.affine_scales))), "Affine scales")
+        settings.affine_iterations = parse_int_list(str(self.settings_store.value("profile/affine_iterations", _format_number_list(settings.affine_iterations))), "Affine iterations")
+        settings.affine_lr = float(self.settings_store.value("profile/affine_lr", settings.affine_lr))
+        settings.greedy_scales = parse_float_list(str(self.settings_store.value("profile/greedy_scales", _format_number_list(settings.greedy_scales))), "Greedy scales")
+        settings.greedy_iterations = parse_int_list(str(self.settings_store.value("profile/greedy_iterations", _format_number_list(settings.greedy_iterations))), "Greedy iterations")
+        settings.greedy_lr = float(self.settings_store.value("profile/greedy_lr", settings.greedy_lr))
+        settings.greedy_optimizer = str(self.settings_store.value("profile/greedy_optimizer", settings.greedy_optimizer))
+        settings.greedy_reset = _as_bool(self.settings_store.value("profile/greedy_reset", settings.greedy_reset))
+        settings.greedy_offload = _as_bool(self.settings_store.value("profile/greedy_offload", settings.greedy_offload))
+        settings.smooth_warp_sigma = float(self.settings_store.value("profile/smooth_warp_sigma", settings.smooth_warp_sigma))
+        settings.smooth_grad_sigma = float(self.settings_store.value("profile/smooth_grad_sigma", settings.smooth_grad_sigma))
+        settings.preview_enabled = _as_bool(self.settings_store.value("profile/preview_enabled", settings.preview_enabled))
+        settings.preview_max_side = int(self.settings_store.value("profile/preview_max_side", settings.preview_max_side))
+        validate_registration_settings(settings)
+        self._loading_profile_fields = True
+        self.profile_combo.setCurrentText(profile_name)
+        self._apply_settings_to_fields(settings)
+        self._loading_profile_fields = False
+
+    def apply_profile_preset(self, profile_name: str) -> None:
+        if self._loading_profile_fields:
+            return
+        settings = registration_settings_for_profile(profile_name)
+        self._apply_settings_to_fields(settings)
+
+    def show_profile_tab(self) -> None:
+        self.sidebar_tabs.setCurrentIndex(1)
+
+    def _apply_settings_to_fields(self, settings: RegistrationSettings) -> None:
+        self.loss_combo.setCurrentText(settings.loss_type)
+        self.cc_kernel_edit.setText(str(settings.cc_kernel_size))
+        self.moments_scale_edit.setText(_format_number(settings.moments_scale))
+        self.moments_order_edit.setText(str(settings.moments_order))
+        self.moments_orientation_combo.setCurrentText(settings.moments_orientation)
+        self.affine_scales_edit.setText(_format_number_list(settings.affine_scales))
+        self.affine_iterations_edit.setText(_format_number_list(settings.affine_iterations))
+        self.affine_lr_edit.setText(str(settings.affine_lr))
+        self.greedy_scales_edit.setText(_format_number_list(settings.greedy_scales))
+        self.greedy_iterations_edit.setText(_format_number_list(settings.greedy_iterations))
+        self.greedy_lr_edit.setText(str(settings.greedy_lr))
+        self.greedy_optimizer_combo.setCurrentText(settings.greedy_optimizer)
+        self.greedy_reset_check.setChecked(settings.greedy_reset)
+        self.greedy_offload_check.setChecked(settings.greedy_offload)
+        self.smooth_warp_sigma_edit.setText(_format_number(settings.smooth_warp_sigma))
+        self.smooth_grad_sigma_edit.setText(_format_number(settings.smooth_grad_sigma))
+        self.preview_enabled_check.setChecked(settings.preview_enabled)
+        self.preview_max_side_edit.setText(str(settings.preview_max_side))
+
+    def _settings_from_profile_fields(self) -> RegistrationSettings:
+        settings = RegistrationSettings.default()
+        settings.loss_type = self.loss_combo.currentText()
+        settings.cc_kernel_size = int(self.cc_kernel_edit.text())
+        settings.moments_scale = float(self.moments_scale_edit.text())
+        settings.moments_order = int(self.moments_order_edit.text())
+        settings.moments_orientation = self.moments_orientation_combo.currentText()
+        settings.affine_scales = parse_float_list(self.affine_scales_edit.text(), "Affine scales")
+        settings.affine_iterations = parse_int_list(self.affine_iterations_edit.text(), "Affine iterations")
+        settings.affine_lr = float(self.affine_lr_edit.text())
+        settings.greedy_scales = parse_float_list(self.greedy_scales_edit.text(), "Greedy scales")
+        settings.greedy_iterations = parse_int_list(self.greedy_iterations_edit.text(), "Greedy iterations")
+        settings.greedy_lr = float(self.greedy_lr_edit.text())
+        settings.greedy_optimizer = self.greedy_optimizer_combo.currentText()
+        settings.greedy_reset = self.greedy_reset_check.isChecked()
+        settings.greedy_offload = self.greedy_offload_check.isChecked()
+        settings.smooth_warp_sigma = float(self.smooth_warp_sigma_edit.text())
+        settings.smooth_grad_sigma = float(self.smooth_grad_sigma_edit.text())
+        settings.preview_enabled = self.preview_enabled_check.isChecked()
+        settings.preview_max_side = int(self.preview_max_side_edit.text())
+        validate_registration_settings(settings)
+        return settings
+
+    def _save_profile_settings(self, settings: RegistrationSettings) -> None:
+        self.settings_store.setValue("profile/name", self.profile_combo.currentText())
+        self.settings_store.setValue("profile/loss_type", settings.loss_type)
+        self.settings_store.setValue("profile/cc_kernel_size", settings.cc_kernel_size)
+        self.settings_store.setValue("profile/moments_scale", settings.moments_scale)
+        self.settings_store.setValue("profile/moments_order", settings.moments_order)
+        self.settings_store.setValue("profile/moments_orientation", settings.moments_orientation)
+        self.settings_store.setValue("profile/affine_scales", _format_number_list(settings.affine_scales))
+        self.settings_store.setValue("profile/affine_iterations", _format_number_list(settings.affine_iterations))
+        self.settings_store.setValue("profile/affine_lr", settings.affine_lr)
+        self.settings_store.setValue("profile/greedy_scales", _format_number_list(settings.greedy_scales))
+        self.settings_store.setValue("profile/greedy_iterations", _format_number_list(settings.greedy_iterations))
+        self.settings_store.setValue("profile/greedy_lr", settings.greedy_lr)
+        self.settings_store.setValue("profile/greedy_optimizer", settings.greedy_optimizer)
+        self.settings_store.setValue("profile/greedy_reset", settings.greedy_reset)
+        self.settings_store.setValue("profile/greedy_offload", settings.greedy_offload)
+        self.settings_store.setValue("profile/smooth_warp_sigma", settings.smooth_warp_sigma)
+        self.settings_store.setValue("profile/smooth_grad_sigma", settings.smooth_grad_sigma)
+        self.settings_store.setValue("profile/preview_enabled", settings.preview_enabled)
+        self.settings_store.setValue("profile/preview_max_side", settings.preview_max_side)
 
     def choose_fixed_bridge(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Choose fixed bridge stack", "", IMAGE_FILTER)
@@ -262,7 +570,11 @@ class MainWindow(QMainWindow):
 
         row = self.job_list.currentRow()
         if row >= 0 and row < len(self.jobs):
-            self._set_preview(self.moving_preview, self.jobs[row].moving_bridge, "Moving bridge")
+            if self.jobs[row].live_preview is not None:
+                self.moving_preview.setPixmap(self.jobs[row].live_preview)
+                self.moving_preview.setToolTip(f"Live overlay: {self.jobs[row].moving_bridge}")
+            else:
+                self._set_preview(self.moving_preview, self.jobs[row].moving_bridge, "Moving bridge")
         else:
             self.moving_preview.setText("No moving bridge selected")
 
@@ -283,11 +595,18 @@ class MainWindow(QMainWindow):
 
         self.settings_store.setValue("fixed_bridge", self.fixed_path_edit.text())
         self.settings_store.setValue("output_dir", self.output_path_edit.text())
-        settings = RegistrationSettings.default()
+        try:
+            settings = self._settings_from_profile_fields()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid registration profile", str(exc))
+            return
         settings.device = self.device_edit.text().strip() or settings.device
         settings.progress_bar = False
         run_output_dir = make_run_output_dir(Path(self.output_path_edit.text()))
         settings.metrics_dir = run_output_dir / "_metrics"
+        self._save_profile_settings(settings)
+        for job in self.jobs:
+            job.live_preview = None
         runner_jobs = [RegistrationJob(job.moving_bridge, job.warp_files) for job in self.jobs]
 
         self.worker_thread = QThread(self)
@@ -313,6 +632,19 @@ class MainWindow(QMainWindow):
     def handle_progress(self, event: Dict[str, object]) -> None:
         name = str(event.get("event", ""))
         row_index = int(event.get("row_index", -1)) if "row_index" in event else -1
+        if name == "preview_update" and row_index >= 0 and row_index < len(self.jobs):
+            preview = event.get("preview")
+            if isinstance(preview, np.ndarray):
+                self.jobs[row_index].live_preview = rgb_preview_pixmap(preview, max_side=420)
+                if self.job_list.currentRow() != row_index:
+                    self.job_list.setCurrentRow(row_index)
+                else:
+                    self.update_preview()
+            message = self._status_message(event)
+            if message:
+                self.statusBar().showMessage(message)
+            return
+
         if row_index >= 0 and row_index < len(self.jobs):
             if name == "row_start":
                 self.jobs[row_index].status = "Running"
@@ -356,6 +688,14 @@ class MainWindow(QMainWindow):
             return f"{prefix}Warping {Path(str(event.get('path'))).name}"
         if name == "warp_complete":
             return f"{prefix}Saved {Path(str(event.get('output_path'))).name}"
+        if name == "preview_update":
+            stage = event.get("stage", "Registration")
+            scale = event.get("scale")
+            scale_text = f" scale {scale}" if scale is not None else ""
+            return f"{prefix}Updated {stage}{scale_text} overlay"
+        if name == "preview_failed":
+            stage = event.get("stage", "Registration")
+            return f"{prefix}{stage} overlay unavailable: {event.get('error')}"
         if name == "batch_start" and event.get("output_dir"):
             return f"Running in {event.get('output_dir')}"
         if name == "batch_complete":
@@ -366,9 +706,12 @@ class MainWindow(QMainWindow):
         self.add_fixed_action.setEnabled(not running)
         self.add_moving_action.setEnabled(not running)
         self.add_payload_action.setEnabled(not running)
+        self.attach_payload_button.setEnabled(not running)
         self.remove_action.setEnabled(not running)
         self.start_action.setEnabled(not running)
         self.stop_action.setEnabled(running)
+        for widget in self.profile_widgets:
+            widget.setEnabled(not running)
         if running:
             self.current_progress.setValue(0)
             self.overall_progress.setValue(0)
@@ -400,6 +743,33 @@ def image_preview_pixmap(path: Path, max_side: int = 420) -> QPixmap:
     qimage = QImage(array.data, w, h, w, QImage.Format.Format_Grayscale8).copy()
     pixmap = QPixmap.fromImage(qimage)
     return pixmap.scaled(max_side, max_side, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+
+
+def rgb_preview_pixmap(array: np.ndarray, max_side: int = 420) -> QPixmap:
+    array = np.ascontiguousarray(array, dtype=np.uint8)
+    if array.ndim != 3 or array.shape[2] != 3:
+        raise ValueError(f"Unsupported RGB preview dimensions: {array.shape}")
+    h, w, _ = array.shape
+    qimage = QImage(array.data, w, h, w * 3, QImage.Format.Format_RGB888).copy()
+    pixmap = QPixmap.fromImage(qimage)
+    return pixmap.scaled(max_side, max_side, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+
+
+def _format_number_list(values: List[float]) -> str:
+    return ", ".join(_format_number(value) for value in values)
+
+
+def _format_number(value: float) -> str:
+    number = float(value)
+    if number.is_integer():
+        return str(int(number))
+    return str(value)
+
+
+def _as_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).lower() in {"1", "true", "yes", "on"}
 
 
 def default_device() -> str:

@@ -16,6 +16,38 @@ Purpose: append completed meaningful entrypoint, docs, tutorial, or script work.
 
 ## Log
 
+## 2026-05-17 - compact GUI profile layout
+
+- Slice goal: make the profile-enabled GUI usable on smaller displays after full-width parameter fields consumed too much vertical space.
+- Passes completed: captured current GUI screenshots, moved advanced profile controls into a scrollable sidebar tab, kept setup controls compact at the top, and visually verified the implemented layout at 1024x768, 1180x760, 1366x768, and 1440x900.
+- What changed: `fireants.gui.app` now uses a queue/profile sidebar with the previewer as the main workspace; the Advanced button switches to the profile tab.
+- Rerun implications: profile controls remain available without pushing live previews and progress bars off-screen.
+- Validation performed: `python -m compileall -q fireants/gui tests/test_gui_runner.py`; `python -m pytest -q tests/test_gui_runner.py`; screenshots under `/tmp/fireants_gui_compact_verified_*.png`.
+
+## 2026-05-17 - GUI profile controls and live overlays
+
+- Slice goal: make GUI registration tuning explicit and add visual scale-by-scale feedback without writing intermediate volumes.
+- Passes completed: added runner profile presets, validation, Greedy optimizer state controls, GUI profile persistence, and live magenta/green preview events after Moments and Affine/Greedy scale completion.
+- What changed: `RegistrationSettings` now carries preview and Greedy optimizer controls; `run_batch_registration` can emit GUI-only `preview_update` overlays that are excluded from metrics JSONL.
+- Rerun implications: the GUI still opens on `Current Full`, but MPS tuning should start from the `Memory Saver` preset and inspect live overlays before full batch runs.
+- Validation performed: `python -m pytest -q tests/test_gui_runner.py`.
+
+## 2026-05-17 - GUI memory-reduction strategy notes
+
+- Slice goal: preserve candidate strategies for reducing full-scale GUI MPS memory before the next tuning pass.
+- Passes completed: added profile-level and owner-layer memory-reduction ideas to the GUI full-scale findings report.
+- What changed: documentation only in `docs/docs/howto/gui-full-scale-findings.md`; no GUI API, runner-default, or public-symbol changes.
+- Rerun implications: start with Greedy scales `[4, 2]`, cheaper full-resolution losses, Adam reset/offload, or SGD before deeper MPS interpolation changes.
+- Validation performed: documentation diff and whitespace checks.
+
+## 2026-05-17 - 24 GB M4 Pro GUI full-default gate
+
+- Slice goal: rerun the GUI-default full-scale one-pair CRHA gate on the 24 GB M4 Pro data-drive setup.
+- Passes completed: preflighted MPS/data geometry, ran plain MPS and fallback-enabled MPS gates, inspected metrics/events, and recorded the failure artifacts.
+- What changed: updated `docs/docs/howto/gui-full-scale-findings.md` with the 24 GB result; no GUI API, runner-default, or public-symbol changes.
+- Rerun implications: plain stock PyTorch 2.6.0 MPS still needs a Moments determinant fix or fallback; fallback-enabled MPS clears Affine scale `1` but fails entering Greedy scale `1` from MPS memory pressure.
+- Validation performed: artifacts under `/Volumes/dataDrive/dataProcessing/FireANTs/testReg/fireants_gui_full_defaults_mps_24gb_gate_20260517_172205` and `/Volumes/dataDrive/dataProcessing/FireANTs/testReg/fireants_gui_full_defaults_mps_24gb_gate_fallback_20260517_172337`; `python -m pytest -q tests/test_gui_runner.py` failed 2 MPS determinant tests without fallback; `PYTORCH_ENABLE_MPS_FALLBACK=1 python -m pytest -q tests/test_gui_runner.py` passed.
+
 ## 2026-05-17 - GUI full-scale findings report
 
 - Slice goal: preserve full-scale GUI pipeline memory and quality findings for future code changes and hardware tests.

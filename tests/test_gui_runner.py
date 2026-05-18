@@ -7,6 +7,11 @@ import pytest
 import SimpleITK as sitk
 
 from fireants.gui.runner import RegistrationJob, RegistrationSettings, run_batch_registration
+from fireants.gui.runner import (
+    parse_float_list,
+    registration_settings_for_profile,
+    validate_registration_settings,
+)
 from fireants.io.image import BatchedImages, Image
 from fireants.registration.greedy import GreedyRegistration
 from fireants.registration.moments import MomentsRegistration
@@ -134,6 +139,81 @@ def test_run_batch_registration_records_failed_row_metrics(tmp_path):
     assert rows[0]["error"]
 
 
+def test_registration_profile_presets_and_validation():
+    memory_saver = registration_settings_for_profile("Memory Saver")
+    assert memory_saver.loss_type == "mse"
+    assert memory_saver.moments_scale == 8
+    assert memory_saver.greedy_scales == [4, 2]
+    validate_registration_settings(memory_saver)
+
+    debug = registration_settings_for_profile("Debug")
+    assert debug.affine_iterations == [1]
+    assert debug.greedy_iterations == [1]
+    validate_registration_settings(debug)
+
+
+def test_validate_registration_settings_rejects_invalid_lists():
+    settings = RegistrationSettings(
+        device="cpu",
+        affine_scales=[1, 2],
+        affine_iterations=[1, 1],
+        greedy_scales=[1],
+        greedy_iterations=[1],
+    )
+    with pytest.raises(ValueError, match="Affine scales must be strictly decreasing"):
+        validate_registration_settings(settings)
+
+    settings.affine_scales = [2, 1]
+    settings.affine_iterations = [1]
+    with pytest.raises(ValueError, match="same length"):
+        validate_registration_settings(settings)
+
+    with pytest.raises(ValueError, match="comma-separated"):
+        parse_float_list("4, nope", "Affine scales")
+
+
+def test_run_batch_registration_emits_preview_without_metrics_payload(tmp_path):
+    fixed = tmp_path / "fixed_bridge.mha"
+    moving = tmp_path / "moving_bridge.mha"
+    output = tmp_path / "out"
+    metrics_dir = output / "_metrics"
+    _write_image(fixed)
+    _write_image(moving, offset=1)
+    events = []
+
+    settings = RegistrationSettings(
+        device="cpu",
+        loss_type="mse",
+        moments_scale=8,
+        affine_scales=[1],
+        affine_iterations=[1],
+        greedy_scales=[1],
+        greedy_iterations=[1],
+        preview_enabled=True,
+        preview_max_side=16,
+        progress_bar=False,
+        metrics_dir=metrics_dir,
+    )
+
+    run_batch_registration(
+        fixed,
+        [RegistrationJob(moving_bridge=moving, warp_files=[])],
+        output,
+        settings=settings,
+        progress_callback=events.append,
+    )
+
+    preview_events = [event for event in events if event["event"] == "preview_update"]
+    assert preview_events
+    preview = preview_events[0]["preview"]
+    assert preview.dtype == np.uint8
+    assert preview.ndim == 3
+    assert preview.shape[2] == 3
+
+    metric_events = [json.loads(line) for line in (metrics_dir / "events.jsonl").read_text().splitlines()]
+    assert not any(event["event"] == "preview_update" for event in metric_events)
+
+
 def test_gui_run_output_dir_is_timestamped(tmp_path):
     pytest.importorskip("PySide6")
     from fireants.gui.app import make_run_output_dir
@@ -143,6 +223,33 @@ def test_gui_run_output_dir_is_timestamped(tmp_path):
     assert run_dir.parent == tmp_path
     assert run_dir.name.startswith("fireants_gui_run_")
     assert not run_dir.exists()
+
+
+def test_gui_profile_fields_build_settings_offscreen(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    pytest.importorskip("PySide6")
+    from PySide6.QtCore import QSettings
+    from PySide6.QtWidgets import QApplication
+    from fireants.gui.app import MainWindow
+
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(tmp_path))
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+
+    window.profile_combo.setCurrentText("Memory Saver")
+    settings = window._settings_from_profile_fields()
+
+    assert settings.loss_type == "mse"
+    assert settings.greedy_scales == [4, 2]
+    assert settings.preview_enabled
+    assert window.sidebar_tabs.tabText(0) == "Queue"
+    assert window.sidebar_tabs.tabText(1) == "Profile"
+    assert window.loss_combo.parent() is not window
+    window.sidebar_tabs.setCurrentIndex(0)
+    window.advanced_profile_button.click()
+    assert window.sidebar_tabs.currentIndex() == 1
+    window.close()
 
 
 def test_moments_registration_orientation_runs_on_mps_when_available(tmp_path):

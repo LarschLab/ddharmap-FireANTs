@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
+import numpy as np
 import torch
 
 from fireants.io.image import BatchedImages, FakeBatchedImages, Image
@@ -21,6 +22,11 @@ from fireants.registration.moments import MomentsRegistration
 
 
 RunnerProgressCallback = Optional[Callable[[Dict[str, Any]], None]]
+
+REGISTRATION_PROFILE_NAMES = ("Current Full", "Memory Saver", "Debug")
+SUPPORTED_LOSS_TYPES = ("cc", "mse", "mi", "fusedcc", "fusedmi", "noop")
+SUPPORTED_MOMENTS_ORIENTATIONS = ("rot", "antirot", "both")
+SUPPORTED_GREEDY_OPTIMIZERS = ("Adam", "SGD")
 
 
 @dataclass
@@ -37,8 +43,13 @@ class RegistrationSettings:
     greedy_scales: List[float] = field(default_factory=lambda: [4, 2, 1])
     greedy_iterations: List[int] = field(default_factory=lambda: [100, 50, 25])
     greedy_lr: float = 0.5
+    greedy_optimizer: str = "Adam"
+    greedy_reset: bool = False
+    greedy_offload: bool = False
     smooth_warp_sigma: float = 0.5
     smooth_grad_sigma: float = 1.0
+    preview_enabled: bool = True
+    preview_max_side: int = 320
     progress_bar: bool = False
     metrics_dir: Optional[Path] = None
 
@@ -50,6 +61,98 @@ class RegistrationSettings:
     @property
     def total_registration_iterations(self) -> int:
         return 1 + sum(self.affine_iterations) + sum(self.greedy_iterations)
+
+
+def registration_settings_for_profile(profile_name: str) -> RegistrationSettings:
+    settings = RegistrationSettings.default()
+    if profile_name == "Current Full":
+        return settings
+    if profile_name == "Memory Saver":
+        settings.loss_type = "mse"
+        settings.moments_scale = 8
+        settings.affine_scales = [4, 2, 1]
+        settings.affine_iterations = [50, 25, 10]
+        settings.greedy_scales = [4, 2]
+        settings.greedy_iterations = [50, 25]
+        return settings
+    if profile_name == "Debug":
+        settings.loss_type = "mse"
+        settings.moments_scale = 8
+        settings.affine_scales = [8]
+        settings.affine_iterations = [1]
+        settings.greedy_scales = [8]
+        settings.greedy_iterations = [1]
+        return settings
+    raise ValueError(f"Unknown registration profile: {profile_name}")
+
+
+def parse_float_list(raw_value: str, field_name: str) -> List[float]:
+    values = [item.strip() for item in str(raw_value).split(",") if item.strip()]
+    if not values:
+        raise ValueError(f"{field_name} must contain at least one value")
+    try:
+        return [float(value) for value in values]
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be a comma-separated list of numbers") from exc
+
+
+def parse_int_list(raw_value: str, field_name: str) -> List[int]:
+    values = [item.strip() for item in str(raw_value).split(",") if item.strip()]
+    if not values:
+        raise ValueError(f"{field_name} must contain at least one value")
+    try:
+        parsed = [int(value) for value in values]
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be a comma-separated list of integers") from exc
+    return parsed
+
+
+def validate_registration_settings(settings: RegistrationSettings) -> None:
+    if not _supported_loss_type(settings.loss_type):
+        raise ValueError(f"Loss type must be one of {', '.join(SUPPORTED_LOSS_TYPES)}")
+    if int(settings.cc_kernel_size) <= 0:
+        raise ValueError("CC kernel size must be positive")
+    if float(settings.moments_scale) <= 0:
+        raise ValueError("Moments scale must be positive")
+    if int(settings.moments_order) <= 0:
+        raise ValueError("Moments order must be positive")
+    if settings.moments_orientation not in SUPPORTED_MOMENTS_ORIENTATIONS:
+        raise ValueError(f"Moments orientation must be one of {', '.join(SUPPORTED_MOMENTS_ORIENTATIONS)}")
+    _validate_scales_and_iterations(settings.affine_scales, settings.affine_iterations, "Affine")
+    _validate_scales_and_iterations(settings.greedy_scales, settings.greedy_iterations, "Greedy")
+    if float(settings.affine_lr) <= 0:
+        raise ValueError("Affine learning rate must be positive")
+    if float(settings.greedy_lr) <= 0:
+        raise ValueError("Greedy learning rate must be positive")
+    if settings.greedy_optimizer.lower() not in {optimizer.lower() for optimizer in SUPPORTED_GREEDY_OPTIMIZERS}:
+        raise ValueError(f"Greedy optimizer must be one of {', '.join(SUPPORTED_GREEDY_OPTIMIZERS)}")
+    if float(settings.smooth_warp_sigma) < 0:
+        raise ValueError("Smooth warp sigma must be non-negative")
+    if float(settings.smooth_grad_sigma) < 0:
+        raise ValueError("Smooth grad sigma must be non-negative")
+    if int(settings.preview_max_side) <= 0:
+        raise ValueError("Preview max side must be positive")
+
+
+def _validate_scales_and_iterations(scales: List[float], iterations: List[int], stage: str) -> None:
+    if len(scales) != len(iterations):
+        raise ValueError(f"{stage} scales and iterations must have the same length")
+    if not scales:
+        raise ValueError(f"{stage} scales must contain at least one value")
+    if any(float(scale) <= 0 for scale in scales):
+        raise ValueError(f"{stage} scales must be positive")
+    if any(scales[index] <= scales[index + 1] for index in range(len(scales) - 1)):
+        raise ValueError(f"{stage} scales must be strictly decreasing")
+    if any(int(iteration) <= 0 for iteration in iterations):
+        raise ValueError(f"{stage} iterations must be positive")
+
+
+def _supported_loss_type(loss_type: str) -> bool:
+    if loss_type in SUPPORTED_LOSS_TYPES:
+        return True
+    if loss_type.startswith("masked_"):
+        return loss_type.replace("masked_", "", 1) in SUPPORTED_LOSS_TYPES
+    return False
 
 
 @dataclass
@@ -78,6 +181,7 @@ def run_batch_registration(
     cancel_requested: Optional[Callable[[], bool]] = None,
 ) -> None:
     settings = settings or RegistrationSettings.default()
+    validate_registration_settings(settings)
     jobs = list(jobs)
     fixed_bridge = Path(fixed_bridge)
     output_dir = Path(output_dir)
@@ -85,8 +189,8 @@ def run_batch_registration(
     completed_units = 0
     metrics = _MetricsRecorder(settings.metrics_dir, fixed_bridge, output_dir, settings) if settings.metrics_dir else None
 
-    def emit(**event: Any) -> None:
-        if metrics is not None:
+    def emit(record_metrics: bool = True, **event: Any) -> None:
+        if metrics is not None and record_metrics:
             metrics.record_event(event)
         if progress_callback is not None:
             progress_callback(event)
@@ -120,6 +224,7 @@ def run_batch_registration(
                 "Greedy": sum(settings.greedy_iterations),
             }
             stage_completed = {stage: 0 for stage in stage_totals}
+            current_registration = None
 
             emit(
                 event="row_start",
@@ -131,7 +236,7 @@ def run_batch_registration(
             )
 
             def reg_progress(event: Dict[str, Any]) -> None:
-                nonlocal completed_units, row_completed_units
+                nonlocal completed_units, row_completed_units, current_registration
                 registration_event = event.get("event")
                 stage = event.get("stage")
                 if registration_event == "iteration" and stage in stage_completed:
@@ -159,6 +264,21 @@ def run_batch_registration(
                     }
                 )
                 emit(**forwarded)
+                should_preview = (
+                    (stage == "Moments" and registration_event == "stage_complete")
+                    or (stage in ("Affine", "Greedy") and registration_event == "scale_complete")
+                )
+                if should_preview:
+                    _emit_preview_update(
+                        current_registration,
+                        fixed_batch,
+                        moving_batch,
+                        settings,
+                        row_index,
+                        str(stage),
+                        event.get("scale"),
+                        emit,
+                    )
                 check_cancelled()
 
             try:
@@ -177,6 +297,7 @@ def run_batch_registration(
                     progress_bar=settings.progress_bar,
                     progress_callback=reg_progress,
                 )
+                current_registration = moments
                 moments.optimize()
 
                 affine = AffineRegistration(
@@ -191,8 +312,13 @@ def run_batch_registration(
                     progress_bar=settings.progress_bar,
                     progress_callback=reg_progress,
                 )
+                current_registration = affine
                 affine.optimize()
 
+                greedy_optimizer_params = {}
+                if settings.greedy_optimizer.lower() == "adam":
+                    greedy_optimizer_params["reset"] = settings.greedy_reset
+                    greedy_optimizer_params["offload"] = settings.greedy_offload
                 reg = GreedyRegistration(
                     scales=settings.greedy_scales,
                     iterations=settings.greedy_iterations,
@@ -200,6 +326,8 @@ def run_batch_registration(
                     moving_images=moving_batch,
                     loss_type=settings.loss_type,
                     cc_kernel_size=settings.cc_kernel_size,
+                    optimizer=settings.greedy_optimizer,
+                    optimizer_params=greedy_optimizer_params,
                     optimizer_lr=settings.greedy_lr,
                     smooth_warp_sigma=settings.smooth_warp_sigma,
                     smooth_grad_sigma=settings.smooth_grad_sigma,
@@ -207,6 +335,7 @@ def run_batch_registration(
                     progress_bar=settings.progress_bar,
                     progress_callback=reg_progress,
                 )
+                current_registration = reg
                 reg.optimize()
 
                 transform_path = row_output_dir / f"{_file_stem(moving_bridge)}_0Warp.nii.gz"
@@ -261,6 +390,95 @@ def _file_stem(path: Path) -> str:
         if name.lower().endswith(suffix):
             return name[: -len(suffix)]
     return path.stem
+
+
+def _emit_preview_update(
+    registration: Any,
+    fixed_batch: BatchedImages,
+    moving_batch: BatchedImages,
+    settings: RegistrationSettings,
+    row_index: int,
+    stage: str,
+    scale: Any,
+    emit: Callable[..., None],
+) -> None:
+    if not settings.preview_enabled or registration is None:
+        return
+    try:
+        preview = _registration_overlay_preview(registration, fixed_batch, moving_batch, settings)
+    except Exception as exc:
+        emit(event="preview_failed", row_index=row_index, stage=stage, scale=scale, error=str(exc))
+        return
+    emit(
+        record_metrics=False,
+        event="preview_update",
+        row_index=row_index,
+        stage=stage,
+        scale=scale,
+        preview=preview,
+        height=int(preview.shape[0]),
+        width=int(preview.shape[1]),
+        channels=3,
+        format="rgb888",
+    )
+
+
+def _registration_overlay_preview(
+    registration: Any,
+    fixed_batch: BatchedImages,
+    moving_batch: BatchedImages,
+    settings: RegistrationSettings,
+) -> np.ndarray:
+    preview_shape = _preview_spatial_shape(fixed_batch.shape[2:], settings.preview_max_side)
+    interpolation_device = torch.device("cpu") if str(settings.device).startswith("mps") and registration.__class__.__name__ == "GreedyRegistration" else None
+    evaluate_shape = preview_shape
+    if registration.__class__.__name__ in ("MomentsRegistration", "AffineRegistration"):
+        evaluate_shape = [fixed_batch.shape[0], fixed_batch.shape[1], *preview_shape]
+    with torch.no_grad():
+        moved = registration.evaluate(
+            fixed_batch,
+            moving_batch,
+            shape=evaluate_shape,
+            interpolation_device=interpolation_device,
+        )
+        fixed = fixed_batch()
+        if tuple(fixed.shape[2:]) != tuple(preview_shape):
+            fixed = device_aware_interpolate(
+                fixed,
+                size=preview_shape,
+                mode=fixed_batch.interpolate_mode,
+                align_corners=True,
+            )
+    return _magenta_green_overlay(fixed, moved)
+
+
+def _preview_spatial_shape(spatial_shape: Iterable[int], max_side: int) -> List[int]:
+    spatial_shape = [int(size) for size in spatial_shape]
+    largest = max(spatial_shape)
+    if largest <= max_side:
+        return spatial_shape
+    scale = float(max_side) / float(largest)
+    return [max(4, int(round(size * scale))) for size in spatial_shape]
+
+
+def _magenta_green_overlay(fixed: torch.Tensor, moved: torch.Tensor) -> np.ndarray:
+    fixed_slice = _center_slice(_robust_normalize(fixed)[0, 0])
+    moved_slice = _center_slice(_robust_normalize(moved)[0, 0])
+    fixed_array = (fixed_slice.numpy() * 255).astype(np.uint8)
+    moved_array = (moved_slice.numpy() * 255).astype(np.uint8)
+    overlay = np.zeros((*fixed_array.shape, 3), dtype=np.uint8)
+    overlay[..., 0] = moved_array
+    overlay[..., 1] = fixed_array
+    overlay[..., 2] = moved_array
+    return np.ascontiguousarray(overlay)
+
+
+def _center_slice(array: torch.Tensor) -> torch.Tensor:
+    if array.ndim == 3:
+        return array[array.shape[0] // 2]
+    if array.ndim == 2:
+        return array
+    raise ValueError(f"Unsupported preview dimensions: {tuple(array.shape)}")
 
 
 class _MetricsRecorder:
