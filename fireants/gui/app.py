@@ -8,7 +8,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 import numpy as np
 import SimpleITK as sitk
@@ -32,7 +32,7 @@ from fireants.gui.runner import (
 )
 
 try:
-    from PySide6.QtCore import QObject, QSettings, Qt, QThread, Signal
+    from PySide6.QtCore import QMimeData, QObject, QSettings, Qt, QThread, Signal
     from PySide6.QtGui import QAction, QImage, QPixmap
     from PySide6.QtWidgets import (
         QApplication,
@@ -63,12 +63,110 @@ except ImportError as exc:  # pragma: no cover - exercised only without optional
 
 
 IMAGE_FILTER = "Images (*.nii *.nii.gz *.nrrd *.mha *.mhd *.tif *.tiff);;All files (*)"
+PREVIEW_STYLE = "QLabel { background: #101418; color: #d9e2ec; border: 1px solid #323b44; }"
+PREVIEW_DROP_STYLE = "QLabel { background: #142231; color: #eef7ff; border: 2px solid #4ca3ff; }"
+QUEUE_STYLE = ""
+QUEUE_DROP_STYLE = "QListWidget { border: 2px solid #4ca3ff; }"
 
 
 def _set_help(widget, text: str) -> None:
     widget.setToolTip(text)
     if hasattr(widget, "setStatusTip"):
         widget.setStatusTip(text)
+
+
+def is_supported_image_path(path: Path) -> bool:
+    name = path.name.lower()
+    return any(name.endswith(suffix) for suffix in SUPPORTED_OUTPUT_IMAGE_EXTENSIONS)
+
+
+def image_paths_from_mime(mime_data: QMimeData) -> List[Path]:
+    paths = []
+    if not mime_data.hasUrls():
+        return paths
+    for url in mime_data.urls():
+        if not url.isLocalFile():
+            continue
+        path = Path(url.toLocalFile())
+        if is_supported_image_path(path):
+            paths.append(path)
+    return paths
+
+
+class FileDropLabel(QLabel):
+    pathsDropped = Signal(list)
+
+    def __init__(self, text: str, drop_enabled: Callable[[], bool]) -> None:
+        super().__init__(text)
+        self._drop_enabled = drop_enabled
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event) -> None:
+        if self._can_accept(event.mimeData()):
+            self.setStyleSheet(PREVIEW_DROP_STYLE)
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dragMoveEvent(self, event) -> None:
+        if self._can_accept(event.mimeData()):
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dragLeaveEvent(self, event) -> None:
+        self.setStyleSheet(PREVIEW_STYLE)
+        event.accept()
+
+    def dropEvent(self, event) -> None:
+        self.setStyleSheet(PREVIEW_STYLE)
+        paths = image_paths_from_mime(event.mimeData()) if self._drop_enabled() else []
+        if paths:
+            self.pathsDropped.emit(paths)
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def _can_accept(self, mime_data: QMimeData) -> bool:
+        return self._drop_enabled() and bool(image_paths_from_mime(mime_data))
+
+
+class FileDropListWidget(QListWidget):
+    pathsDropped = Signal(list)
+
+    def __init__(self, drop_enabled: Callable[[], bool]) -> None:
+        super().__init__()
+        self._drop_enabled = drop_enabled
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event) -> None:
+        if self._can_accept(event.mimeData()):
+            self.setStyleSheet(QUEUE_DROP_STYLE)
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dragMoveEvent(self, event) -> None:
+        if self._can_accept(event.mimeData()):
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dragLeaveEvent(self, event) -> None:
+        self.setStyleSheet(QUEUE_STYLE)
+        event.accept()
+
+    def dropEvent(self, event) -> None:
+        self.setStyleSheet(QUEUE_STYLE)
+        paths = image_paths_from_mime(event.mimeData()) if self._drop_enabled() else []
+        if paths:
+            self.pathsDropped.emit(paths)
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def _can_accept(self, mime_data: QMimeData) -> bool:
+        return self._drop_enabled() and bool(image_paths_from_mime(mime_data))
 
 
 @dataclass
@@ -134,6 +232,7 @@ class MainWindow(QMainWindow):
         self.jobs: List[GuiJob] = []
         self.worker_thread = None
         self.worker = None
+        self._running = False
         self._loading_profile_fields = False
         self._build_ui()
         self._restore_settings()
@@ -361,9 +460,10 @@ class MainWindow(QMainWindow):
         queue_tab = QWidget()
         queue_layout = QVBoxLayout(queue_tab)
         queue_layout.setContentsMargins(8, 8, 8, 8)
-        self.job_list = QListWidget()
+        self.job_list = FileDropListWidget(lambda: not self._running)
         self.job_list.currentRowChanged.connect(self.update_preview)
-        _set_help(self.job_list, "Registration queue. Select a moving bridge row to preview it or attach additional moving-side files.")
+        self.job_list.pathsDropped.connect(self.add_moving_bridge_paths)
+        _set_help(self.job_list, "Registration queue. Select a moving bridge row to preview it or attach additional moving-side files. Drop images here to add moving bridge rows.")
         queue_layout.addWidget(self.job_list, 1)
         self.attach_payload_button = QPushButton("Attach warp files")
         self.attach_payload_button.clicked.connect(self.attach_warp_files)
@@ -543,14 +643,16 @@ class MainWindow(QMainWindow):
         preview_layout.addLayout(title_row)
 
         preview_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.moving_preview = QLabel("No moving bridge selected")
-        self.fixed_preview = QLabel("No fixed bridge selected")
-        _set_help(self.moving_preview, "Selected moving bridge preview. Add a moving bridge row to see it here.")
-        _set_help(self.fixed_preview, "Fixed bridge preview. Choose a fixed bridge to see it here.")
+        self.moving_preview = FileDropLabel("No moving bridge selected", lambda: not self._running)
+        self.fixed_preview = FileDropLabel("No fixed bridge selected", lambda: not self._running)
+        self.moving_preview.pathsDropped.connect(self.add_moving_bridge_paths)
+        self.fixed_preview.pathsDropped.connect(self.set_fixed_bridge_from_drop)
+        _set_help(self.moving_preview, "Selected moving bridge preview. Drop images here to add moving bridge rows.")
+        _set_help(self.fixed_preview, "Fixed bridge preview. Drop an image here to set the fixed bridge.")
         for label in (self.moving_preview, self.fixed_preview):
             label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             label.setMinimumSize(220, 220)
-            label.setStyleSheet("QLabel { background: #101418; color: #d9e2ec; border: 1px solid #323b44; }")
+            label.setStyleSheet(PREVIEW_STYLE)
             label.setScaledContents(False)
         preview_splitter.addWidget(self.moving_preview)
         preview_splitter.addWidget(self.fixed_preview)
@@ -759,9 +861,7 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, "Choose fixed bridge stack", "", IMAGE_FILTER)
         if not path:
             return
-        self.fixed_path_edit.setText(path)
-        self.settings_store.setValue("fixed_bridge", path)
-        self.update_preview()
+        self.set_fixed_bridge_path(Path(path))
 
     def choose_output_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Choose output folder")
@@ -772,12 +872,30 @@ class MainWindow(QMainWindow):
 
     def add_moving_bridges(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(self, "Choose moving bridge stacks", "", IMAGE_FILTER)
-        for raw_path in paths:
-            path = Path(raw_path)
+        self.add_moving_bridge_paths([Path(path) for path in paths])
+
+    def set_fixed_bridge_path(self, path: Path) -> None:
+        self.fixed_path_edit.setText(str(path))
+        self.settings_store.setValue("fixed_bridge", str(path))
+        self.update_preview()
+
+    def set_fixed_bridge_from_drop(self, paths: List[Path]) -> None:
+        if not paths:
+            return
+        self.set_fixed_bridge_path(paths[0])
+        message = f"Fixed bridge set to {paths[0].name}"
+        if len(paths) > 1:
+            message = f"{message}; ignored {len(paths) - 1} additional dropped file(s)"
+        self.statusBar().showMessage(message)
+
+    def add_moving_bridge_paths(self, paths: List[Path]) -> None:
+        if not paths:
+            return
+        first_new_row = len(self.jobs)
+        for path in paths:
             self.jobs.append(GuiJob(moving_bridge=path))
-        self.refresh_job_list()
-        if paths and self.job_list.currentRow() < 0:
-            self.job_list.setCurrentRow(0)
+        self.refresh_job_list(keep_row=first_new_row)
+        self.statusBar().showMessage(f"Added {len(paths)} moving bridge file(s)")
 
     def attach_warp_files(self) -> None:
         row = self.job_list.currentRow()
@@ -955,6 +1073,7 @@ class MainWindow(QMainWindow):
         return ""
 
     def _set_running(self, running: bool) -> None:
+        self._running = running
         self.add_fixed_action.setEnabled(not running)
         self.add_moving_action.setEnabled(not running)
         self.add_payload_action.setEnabled(not running)

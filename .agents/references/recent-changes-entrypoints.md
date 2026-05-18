@@ -16,6 +16,14 @@ Purpose: append completed meaningful entrypoint, docs, tutorial, or script work.
 
 ## Log
 
+## 2026-05-18 - GUI drag-and-drop inputs
+
+- Slice goal: let users populate fixed and moving GUI inputs by dropping image files onto the relevant preview or queue target.
+- Passes completed: added local-image MIME parsing, drop-enabled fixed/moving preview widgets, queue-list drops for moving rows, and state locking during registration.
+- What changed: dropping a supported image onto the fixed preview sets the fixed bridge; dropping supported images onto the moving preview or queue list appends moving bridge rows.
+- Rerun implications: GUI input setup can now be done with drag-and-drop; registration runner behavior is unchanged.
+- Validation performed: `python -m compileall -q fireants/gui tests/test_gui_runner.py`; `python -m pytest -q tests/test_gui_runner.py`; offscreen PySide screenshot `/tmp/fireants_gui_drag_drop_verified.png` verified populated fixed/moving previews and queue row without overlapping controls.
+
 ## 2026-05-18 - GUI warped format and Z-orientation diagnostics
 
 - Slice goal: make GUI warped-image output format explicit and record evidence for apparent Z reversals without auto-flipping data.

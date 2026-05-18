@@ -472,6 +472,70 @@ def test_gui_profile_fields_build_settings_offscreen(tmp_path, monkeypatch):
     window.close()
 
 
+def test_gui_drop_mime_parsing_accepts_supported_local_images(tmp_path):
+    pytest.importorskip("PySide6")
+    from PySide6.QtCore import QMimeData, QUrl
+    from fireants.gui.app import image_paths_from_mime
+
+    supported = tmp_path / "moving.nii.gz"
+    unsupported = tmp_path / "notes.txt"
+    supported.write_text("")
+    unsupported.write_text("")
+    mime = QMimeData()
+    mime.setUrls(
+        [
+            QUrl.fromLocalFile(str(supported)),
+            QUrl.fromLocalFile(str(unsupported)),
+            QUrl("https://example.invalid/fixed.nrrd"),
+        ]
+    )
+
+    assert image_paths_from_mime(mime) == [supported]
+
+
+def test_gui_drop_handlers_update_fixed_and_moving_inputs(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    pytest.importorskip("PySide6")
+    from PySide6.QtCore import QSettings
+    from PySide6.QtWidgets import QApplication
+    from fireants.gui.app import MainWindow
+
+    fixed = tmp_path / "fixed.mha"
+    moving_a = tmp_path / "moving_a.mha"
+    moving_b = tmp_path / "moving_b.nrrd"
+    extra_fixed = tmp_path / "extra_fixed.mha"
+    for path in (fixed, moving_a, moving_b, extra_fixed):
+        _write_image(path)
+
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(tmp_path / "settings"))
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+
+    assert window.fixed_preview.acceptDrops()
+    assert window.moving_preview.acceptDrops()
+    assert window.job_list.acceptDrops()
+
+    window.set_fixed_bridge_from_drop([fixed, extra_fixed])
+    assert window.fixed_path_edit.text() == str(fixed)
+    assert window.settings_store.value("fixed_bridge") == str(fixed)
+    assert "ignored 1 additional" in window.statusBar().currentMessage()
+
+    window.add_moving_bridge_paths([moving_a, moving_b])
+    assert [job.moving_bridge for job in window.jobs] == [moving_a, moving_b]
+    assert window.job_list.count() == 2
+    assert window.job_list.currentRow() == 0
+    assert window.moving_preview.toolTip() == str(moving_a)
+    assert not window.moving_preview.pixmap().isNull()
+
+    window._set_running(True)
+    assert not window.fixed_preview._drop_enabled()
+    assert not window.moving_preview._drop_enabled()
+    assert not window.job_list._drop_enabled()
+    window._set_running(False)
+    window.close()
+
+
 def test_moments_registration_orientation_runs_on_mps_when_available(tmp_path):
     import torch
 
