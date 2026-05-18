@@ -194,6 +194,20 @@ class TestFakeBatchedImages:
         assert torch.equal(fake_batch.get_torch2phy(), batch.torch2phy)
         assert torch.equal(fake_batch.get_phy2torch(), batch.phy2torch)
 
+    @pytest.mark.parametrize("suffix", [".nii.gz", ".nrrd"])
+    def test_write_image_preserves_3d_z_order(self, sample_itk_image_3d, tmp_path, suffix):
+        """Test that writing tensor-backed images does not reverse the Z axis."""
+        img = Image(sample_itk_image_3d, device='cpu')
+        batch = BatchedImages(img)
+        out_path = tmp_path / f"roundtrip{suffix}"
+
+        FakeBatchedImages(batch().clone(), batch).write_image(str(out_path), permitted_ext=[".nii.gz", ".nrrd"])
+
+        expected = sitk.GetArrayFromImage(sample_itk_image_3d)
+        actual = sitk.GetArrayFromImage(sitk.ReadImage(str(out_path)))
+        assert np.array_equal(actual, expected)
+        assert not np.array_equal(actual, expected[::-1])
+
 def test_concat_images(sample_itk_image_2d):
     """Test image concatenation functionality"""
     # Create multiple images

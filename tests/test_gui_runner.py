@@ -11,6 +11,7 @@ from fireants.gui.runner import RegistrationJob, RegistrationSettings, run_batch
 from fireants.gui.runner import (
     PIPELINE_ANTS_RIGID_AFFINE_SYN,
     _emit_preview_update,
+    _profile_corr,
     _winsorize_tensor,
     parse_float_list,
     registration_settings_for_profile,
@@ -111,6 +112,43 @@ def test_run_batch_registration_writes_metrics(tmp_path):
     assert rows[0]["final_ncc"] != ""
 
 
+def test_run_batch_registration_uses_configured_warped_image_extension(tmp_path):
+    fixed = tmp_path / "fixed_bridge.mha"
+    moving = tmp_path / "moving_bridge.mha"
+    output = tmp_path / "out"
+    metrics_dir = output / "_metrics"
+    _write_image(fixed)
+    _write_image(moving, offset=1)
+
+    settings = RegistrationSettings(
+        device="cpu",
+        loss_type="mse",
+        affine_scales=[1],
+        affine_iterations=[1],
+        greedy_scales=[1],
+        greedy_iterations=[1],
+        output_image_extension=".nrrd",
+        progress_bar=False,
+        metrics_dir=metrics_dir,
+    )
+
+    run_batch_registration(
+        fixed,
+        [RegistrationJob(moving_bridge=moving, warp_files=[])],
+        output,
+        settings=settings,
+    )
+
+    row_dir = output / "moving_bridge"
+    warped_path = row_dir / "moving_bridge_warped.nrrd"
+    assert warped_path.exists()
+    assert not (row_dir / "moving_bridge_warped.nii.gz").exists()
+    assert (row_dir / "moving_bridge_0Warp.nii.gz").exists()
+    with (metrics_dir / "pairs.csv").open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows[0]["warped_bridge_path"].endswith("moving_bridge_warped.nrrd")
+
+
 def test_run_batch_registration_records_failed_row_metrics(tmp_path):
     fixed = tmp_path / "fixed_bridge.mha"
     missing_moving = tmp_path / "missing_bridge.mha"
@@ -197,6 +235,22 @@ def test_validate_registration_settings_rejects_scaling_without_second_order_mom
 
     with pytest.raises(ValueError, match="Moments scaling requires moments order 2"):
         validate_registration_settings(settings)
+
+
+def test_validate_registration_settings_rejects_unknown_warped_output_extension():
+    settings = RegistrationSettings(device="cpu", output_image_extension=".png")
+
+    with pytest.raises(ValueError, match="Warped output extension"):
+        validate_registration_settings(settings)
+
+
+def test_z_profile_correlation_distinguishes_reversed_stack():
+    moving_profile = np.array([0.0, 0.2, 0.6, 1.0], dtype=np.float64)
+    moved_direct = moving_profile.copy()
+    moved_reversed = moving_profile[::-1].copy()
+
+    assert _profile_corr(moved_direct, moving_profile) > _profile_corr(moved_direct, moving_profile[::-1])
+    assert _profile_corr(moved_reversed, moving_profile[::-1]) > _profile_corr(moved_reversed, moving_profile)
 
 
 def test_run_batch_registration_emits_preview_without_metrics_payload(tmp_path):
@@ -390,7 +444,11 @@ def test_gui_profile_fields_build_settings_offscreen(tmp_path, monkeypatch):
     assert settings.loss_type == "mse"
     assert settings.greedy_scales == [4, 2]
     assert settings.moments_perform_scaling is True
+    assert settings.output_image_extension == ".nii.gz"
     assert settings.preview_enabled
+    window.output_format_combo.setCurrentText(".nrrd")
+    settings = window._settings_from_profile_fields()
+    assert settings.output_image_extension == ".nrrd"
     assert window.sidebar_tabs.tabText(0) == "Queue"
     assert window.sidebar_tabs.tabText(1) == "Profile"
     assert window.loss_combo.parent() is not window

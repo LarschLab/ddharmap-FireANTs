@@ -16,6 +16,14 @@ Purpose: append completed meaningful entrypoint, docs, tutorial, or script work.
 
 ## Log
 
+## 2026-05-18 - GUI warped format and Z-orientation diagnostics
+
+- Slice goal: make GUI warped-image output format explicit and record evidence for apparent Z reversals without auto-flipping data.
+- Passes completed: added a `RegistrationSettings.output_image_extension` option, wired a GUI `Warped` format selector, kept ANTs transform files as `.nii.gz`, and emitted stage-level `z_orientation_check` events after Moments/Affine/final deformable stages.
+- What changed: GUI warped images default to `.nii.gz` but can be written as `.nii`, `.nrrd`, `.mha`, `.mhd`, `.tif`, or `.tiff`; metrics JSONL now records direct-vs-reversed Z profile correlation and centerline moving-Z direction when available.
+- Rerun implications: use the metrics event stream to determine whether a Z reversal is introduced by registration, output-space comparison, or viewer/export behavior; choosing non-NIfTI output affects warped images only, not saved warp fields.
+- Validation performed: `python -m compileall -q fireants/gui tests/test_gui_runner.py tests/distributed/test_image_io.py`; `python -m pytest -q tests/test_gui_runner.py`; `python -m pytest -q tests/distributed/test_image_io.py::TestFakeBatchedImages::test_write_image_preserves_3d_z_order`. Full `tests/distributed/test_image_io.py` still hits an existing NCCL/CUDA device initialization failure on this MPS-only build.
+
 ## 2026-05-18 - GUI Moments scaling and parameter tooltips
 
 - Slice goal: expose Moments scale correction in the GUI and make advanced registration parameters easier for new users to understand.

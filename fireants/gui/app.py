@@ -20,6 +20,7 @@ from fireants.gui.runner import (
     SUPPORTED_GREEDY_OPTIMIZERS,
     SUPPORTED_LOSS_TYPES,
     SUPPORTED_MOMENTS_ORIENTATIONS,
+    SUPPORTED_OUTPUT_IMAGE_EXTENSIONS,
     SUPPORTED_SYN_OPTIMIZERS,
     RegistrationJob,
     RegistrationSettings,
@@ -183,6 +184,8 @@ class MainWindow(QMainWindow):
         self.fixed_path_edit.setReadOnly(True)
         self.output_path_edit = QLineEdit()
         self.output_path_edit.setReadOnly(True)
+        self.output_format_combo = QComboBox()
+        self.output_format_combo.addItems(SUPPORTED_OUTPUT_IMAGE_EXTENSIONS)
         self.device_edit = QLineEdit(default_device())
         self.device_edit.setMaximumWidth(150)
         choose_fixed = QPushButton("Browse")
@@ -196,6 +199,7 @@ class MainWindow(QMainWindow):
         self.profile_combo.currentTextChanged.connect(self.apply_profile_preset)
         _set_help(self.fixed_path_edit, "Fixed bridge path. This image defines the output space for registration.")
         _set_help(self.output_path_edit, "Output folder. Each run creates a timestamped child folder here.")
+        _set_help(self.output_format_combo, "File format for warped images. Transform fields remain NIfTI for ANTs compatibility.")
         _set_help(self.device_edit, "Compute device, such as cuda:0, mps, or cpu. GPU devices are faster but have stricter memory limits.")
         _set_help(choose_fixed, "Browse for the fixed reference bridge stack.")
         _set_help(choose_output, "Browse for the folder where registered outputs should be written.")
@@ -214,6 +218,10 @@ class MainWindow(QMainWindow):
         output_row.addWidget(output_label)
         output_row.addWidget(self.output_path_edit, 1)
         output_row.addWidget(choose_output)
+        format_label = QLabel("Warped")
+        _set_help(format_label, self.output_format_combo.toolTip())
+        output_row.addWidget(format_label)
+        output_row.addWidget(self.output_format_combo)
         device_label = QLabel("Device")
         _set_help(device_label, self.device_edit.toolTip())
         output_row.addWidget(device_label)
@@ -283,6 +291,7 @@ class MainWindow(QMainWindow):
         self.profile_widgets = [
             self.profile_combo,
             self.advanced_profile_button,
+            self.output_format_combo,
             self.loss_combo,
             self.cc_kernel_edit,
             self.winsorize_enabled_check,
@@ -515,6 +524,7 @@ class MainWindow(QMainWindow):
             self.smooth_warp_sigma_edit,
             self.smooth_grad_sigma_edit,
             self.preview_max_side_edit,
+            self.output_format_combo,
         ):
             widget.setMinimumWidth(80)
 
@@ -602,6 +612,7 @@ class MainWindow(QMainWindow):
         settings.smooth_grad_sigma = float(self.settings_store.value("profile/smooth_grad_sigma", settings.smooth_grad_sigma))
         settings.preview_enabled = _as_bool(self.settings_store.value("profile/preview_enabled", settings.preview_enabled))
         settings.preview_max_side = int(self.settings_store.value("profile/preview_max_side", settings.preview_max_side))
+        settings.output_image_extension = str(self.settings_store.value("profile/output_image_extension", settings.output_image_extension))
         validate_registration_settings(settings)
         self._loading_profile_fields = True
         self.profile_combo.setCurrentText(profile_name)
@@ -662,6 +673,7 @@ class MainWindow(QMainWindow):
         self.smooth_grad_sigma_edit.setText(_format_number(settings.smooth_grad_sigma))
         self.preview_enabled_check.setChecked(settings.preview_enabled)
         self.preview_max_side_edit.setText(str(settings.preview_max_side))
+        self.output_format_combo.setCurrentText(settings.output_image_extension)
 
     def _settings_from_profile_fields(self) -> RegistrationSettings:
         settings = registration_settings_for_profile(self.profile_combo.currentText())
@@ -700,6 +712,7 @@ class MainWindow(QMainWindow):
         settings.smooth_grad_sigma = float(self.smooth_grad_sigma_edit.text())
         settings.preview_enabled = self.preview_enabled_check.isChecked()
         settings.preview_max_side = int(self.preview_max_side_edit.text())
+        settings.output_image_extension = self.output_format_combo.currentText()
         validate_registration_settings(settings)
         return settings
 
@@ -740,6 +753,7 @@ class MainWindow(QMainWindow):
         self.settings_store.setValue("profile/smooth_grad_sigma", settings.smooth_grad_sigma)
         self.settings_store.setValue("profile/preview_enabled", settings.preview_enabled)
         self.settings_store.setValue("profile/preview_max_side", settings.preview_max_side)
+        self.settings_store.setValue("profile/output_image_extension", settings.output_image_extension)
 
     def choose_fixed_bridge(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Choose fixed bridge stack", "", IMAGE_FILTER)
@@ -928,6 +942,12 @@ class MainWindow(QMainWindow):
         if name == "preview_failed":
             stage = event.get("stage", "Registration")
             return f"{prefix}{stage} overlay unavailable: {event.get('error')}"
+        if name == "z_orientation_check" and event.get("z_orientation_warning"):
+            stage = event.get("stage", "Registration")
+            return f"{prefix}{stage} Z-orientation warning recorded in metrics"
+        if name == "z_orientation_check_failed":
+            stage = event.get("stage", "Registration")
+            return f"{prefix}{stage} Z-orientation check unavailable: {event.get('error')}"
         if name == "batch_start" and event.get("output_dir"):
             return f"Running in {event.get('output_dir')}"
         if name == "batch_complete":

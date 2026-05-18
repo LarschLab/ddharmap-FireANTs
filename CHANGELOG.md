@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+### 2026-05-18 - GUI output diagnostics - changes
+
+- Added configurable GUI warped-image output extension with `.nii.gz` as the default.
+- Kept saved transform fields as `.nii.gz` for ANTs compatibility.
+- Added GUI runner Z-orientation diagnostics in metrics events to help identify apparent stack reversals.
+
 ### 2026-04-08 - fireants 1.5.1, fireants_fused_ops 1.2.0 - changes
 
 added `compose_n` option to adam and sgd with reasonable defaults (n=1 for adam, n=10 for sgd)

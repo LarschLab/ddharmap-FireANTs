@@ -32,6 +32,7 @@ SUPPORTED_LOSS_TYPES = ("cc", "mse", "mi", "fusedcc", "fusedmi", "noop")
 SUPPORTED_MOMENTS_ORIENTATIONS = ("rot", "antirot", "both")
 SUPPORTED_GREEDY_OPTIMIZERS = ("Adam", "SGD")
 SUPPORTED_SYN_OPTIMIZERS = ("Adam", "SGD")
+SUPPORTED_OUTPUT_IMAGE_EXTENSIONS = (".nii.gz", ".nii", ".nrrd", ".mha", ".mhd", ".tif", ".tiff")
 
 
 @dataclass
@@ -74,6 +75,7 @@ class RegistrationSettings:
     smooth_grad_sigma: float = 1.0
     preview_enabled: bool = True
     preview_max_side: int = 320
+    output_image_extension: str = ".nii.gz"
     progress_bar: bool = False
     metrics_dir: Optional[Path] = None
 
@@ -207,6 +209,8 @@ def validate_registration_settings(settings: RegistrationSettings) -> None:
         raise ValueError("Smooth grad sigma must be non-negative")
     if int(settings.preview_max_side) <= 0:
         raise ValueError("Preview max side must be positive")
+    if settings.output_image_extension not in SUPPORTED_OUTPUT_IMAGE_EXTENSIONS:
+        raise ValueError(f"Warped output extension must be one of {', '.join(SUPPORTED_OUTPUT_IMAGE_EXTENSIONS)}")
 
 
 def _validate_scales_and_iterations(scales: List[float], iterations: List[int], stage: str) -> None:
@@ -350,6 +354,16 @@ def run_batch_registration(
                         event.get("scale"),
                         emit,
                     )
+                if registration_event == "stage_complete" and stage in {"Moments", "Affine", "Greedy", "SyN"}:
+                    _emit_z_orientation_check(
+                        current_registration,
+                        fixed_reg_batch,
+                        moving_batch,
+                        settings,
+                        row_index,
+                        str(stage),
+                        emit,
+                    )
                 check_cancelled()
 
             try:
@@ -484,8 +498,8 @@ def run_batch_registration(
                     interpolation_device = torch.device("cpu") if settings.device.startswith("mps") else None
                     moved = reg.evaluate(fixed_reg_batch, source_batch, interpolation_device=interpolation_device)
                     moved_batch = FakeBatchedImages(moved, fixed_batch)
-                    output_path = row_output_dir / f"{_file_stem(source_path)}_warped.nii.gz"
-                    moved_batch.write_image(str(output_path))
+                    output_path = row_output_dir / f"{_file_stem(source_path)}_warped{settings.output_image_extension}"
+                    moved_batch.write_image(str(output_path), permitted_ext=list(SUPPORTED_OUTPUT_IMAGE_EXTENSIONS))
                     completed_units += 1
                     row_completed_units += 1
                     quality_metrics = {}
@@ -599,6 +613,70 @@ def _emit_preview_update(
     )
 
 
+def _emit_z_orientation_check(
+    registration: Any,
+    fixed_batch: BatchedImages,
+    moving_batch: BatchedImages,
+    settings: RegistrationSettings,
+    row_index: int,
+    stage: str,
+    emit: Callable[..., None],
+) -> None:
+    if registration is None or fixed_batch.dims != 3:
+        return
+    try:
+        diagnostic = _z_orientation_diagnostic(registration, fixed_batch, moving_batch, settings)
+    except Exception as exc:
+        emit(event="z_orientation_check_failed", row_index=row_index, stage=stage, error=str(exc))
+        return
+    emit(event="z_orientation_check", row_index=row_index, stage=stage, **diagnostic)
+
+
+def _z_orientation_diagnostic(
+    registration: Any,
+    fixed_batch: BatchedImages,
+    moving_batch: BatchedImages,
+    settings: RegistrationSettings,
+) -> Dict[str, Any]:
+    spatial_shape = _preview_spatial_shape(fixed_batch.shape[2:], min(int(settings.preview_max_side), 96))
+    evaluate_shape = _registration_evaluate_shape(registration, fixed_batch, spatial_shape)
+    interpolation_device = torch.device("cpu") if str(settings.device).startswith("mps") and registration.__class__.__name__ in {"GreedyRegistration", "SyNRegistration"} else None
+    with torch.no_grad():
+        moved = registration.evaluate(
+            fixed_batch,
+            moving_batch,
+            shape=evaluate_shape,
+            interpolation_device=interpolation_device,
+        ).detach().cpu()
+        moving = moving_batch().detach().cpu()
+        if tuple(moving.shape[2:]) != tuple(moved.shape[2:]):
+            moving = device_aware_interpolate(
+                moving,
+                size=moved.shape[2:],
+                mode=moving_batch.interpolate_mode,
+                align_corners=True,
+            )
+        coords = _centerline_warped_z(registration, fixed_batch, moving_batch, evaluate_shape)
+
+    moved_profile = _z_profile(moved)
+    moving_profile = _z_profile(moving)
+    direct_corr = _profile_corr(moved_profile, moving_profile)
+    reversed_corr = _profile_corr(moved_profile, np.flip(moving_profile))
+    centerline_delta = None
+    if coords is not None and coords.size > 1:
+        centerline_delta = float(coords[-1] - coords[0])
+    reverse_evidence = reversed_corr > direct_corr + 0.05
+    centerline_reversed = centerline_delta is not None and centerline_delta < -0.05
+    return {
+        "z_profile_direct_corr": float(direct_corr),
+        "z_profile_reversed_corr": float(reversed_corr),
+        "z_profile_reversed_evidence": bool(reverse_evidence),
+        "centerline_moving_z_delta": centerline_delta,
+        "centerline_reversed_evidence": bool(centerline_reversed),
+        "z_orientation_warning": bool(reverse_evidence or centerline_reversed),
+    }
+
+
 def _registration_overlay_preview(
     registration: Any,
     fixed_batch: BatchedImages,
@@ -628,6 +706,12 @@ def _registration_overlay_preview(
     return _magenta_green_overlay(fixed, moved)
 
 
+def _registration_evaluate_shape(registration: Any, fixed_batch: BatchedImages, spatial_shape: List[int]) -> List[int]:
+    if registration.__class__.__name__ in ("MomentsRegistration", "RigidRegistration", "AffineRegistration"):
+        return [fixed_batch.shape[0], fixed_batch.shape[1], *spatial_shape]
+    return spatial_shape
+
+
 def _preview_spatial_shape(spatial_shape: Iterable[int], max_side: int) -> List[int]:
     spatial_shape = [int(size) for size in spatial_shape]
     largest = max(spatial_shape)
@@ -655,6 +739,44 @@ def _center_slice(array: torch.Tensor) -> torch.Tensor:
     if array.ndim == 2:
         return array
     raise ValueError(f"Unsupported preview dimensions: {tuple(array.shape)}")
+
+
+def _z_profile(tensor: torch.Tensor) -> np.ndarray:
+    array = _robust_normalize(tensor)[0, 0].numpy()
+    if array.ndim != 3:
+        raise ValueError(f"Z orientation diagnostics require 3D tensors, got {array.shape}")
+    return array.mean(axis=(1, 2)).astype(np.float64)
+
+
+def _profile_corr(left: np.ndarray, right: np.ndarray) -> float:
+    if left.size != right.size:
+        x_old = np.linspace(0.0, 1.0, num=right.size)
+        x_new = np.linspace(0.0, 1.0, num=left.size)
+        right = np.interp(x_new, x_old, right)
+    left = left - left.mean()
+    right = right - right.mean()
+    denom = float(np.sqrt(np.sum(left * left) * np.sum(right * right)))
+    if denom == 0.0:
+        return 0.0
+    return float(np.sum(left * right) / denom)
+
+
+def _centerline_warped_z(
+    registration: Any,
+    fixed_batch: BatchedImages,
+    moving_batch: BatchedImages,
+    evaluate_shape: List[int],
+) -> Optional[np.ndarray]:
+    try:
+        coords = registration.get_warped_coordinates(fixed_batch, moving_batch, shape=evaluate_shape)
+    except Exception:
+        return None
+    coords = coords.detach().cpu()
+    if coords.ndim != 5 or coords.shape[-1] != 3:
+        return None
+    center_y = coords.shape[2] // 2
+    center_x = coords.shape[3] // 2
+    return coords[0, :, center_y, center_x, 2].numpy()
 
 
 class _MetricsRecorder:
