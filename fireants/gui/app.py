@@ -15,10 +15,12 @@ import SimpleITK as sitk
 import torch
 
 from fireants.gui.runner import (
+    PIPELINE_ANTS_RIGID_AFFINE_SYN,
     REGISTRATION_PROFILE_NAMES,
     SUPPORTED_GREEDY_OPTIMIZERS,
     SUPPORTED_LOSS_TYPES,
     SUPPORTED_MOMENTS_ORIENTATIONS,
+    SUPPORTED_SYN_OPTIMIZERS,
     RegistrationJob,
     RegistrationSettings,
     parse_float_list,
@@ -202,10 +204,22 @@ class MainWindow(QMainWindow):
         self.loss_combo = QComboBox()
         self.loss_combo.addItems(SUPPORTED_LOSS_TYPES)
         self.cc_kernel_edit = QLineEdit()
+        self.winsorize_enabled_check = QCheckBox("Enabled")
+        self.winsorize_lower_edit = QLineEdit()
+        self.winsorize_upper_edit = QLineEdit()
         self.moments_scale_edit = QLineEdit()
         self.moments_order_edit = QLineEdit()
         self.moments_orientation_combo = QComboBox()
         self.moments_orientation_combo.addItems(SUPPORTED_MOMENTS_ORIENTATIONS)
+        self.rigid_loss_combo = QComboBox()
+        self.rigid_loss_combo.addItems(SUPPORTED_LOSS_TYPES)
+        self.rigid_mi_bins_edit = QLineEdit()
+        self.rigid_scales_edit = QLineEdit()
+        self.rigid_iterations_edit = QLineEdit()
+        self.rigid_lr_edit = QLineEdit()
+        self.affine_loss_combo = QComboBox()
+        self.affine_loss_combo.addItems(SUPPORTED_LOSS_TYPES)
+        self.affine_mi_bins_edit = QLineEdit()
         self.affine_scales_edit = QLineEdit()
         self.affine_iterations_edit = QLineEdit()
         self.affine_lr_edit = QLineEdit()
@@ -222,6 +236,14 @@ class MainWindow(QMainWindow):
         greedy_flags.addWidget(self.greedy_reset_check)
         greedy_flags.addWidget(self.greedy_offload_check)
         greedy_flags.addStretch(1)
+        self.syn_loss_combo = QComboBox()
+        self.syn_loss_combo.addItems(SUPPORTED_LOSS_TYPES)
+        self.syn_cc_kernel_edit = QLineEdit()
+        self.syn_scales_edit = QLineEdit()
+        self.syn_iterations_edit = QLineEdit()
+        self.syn_lr_edit = QLineEdit()
+        self.syn_optimizer_combo = QComboBox()
+        self.syn_optimizer_combo.addItems(SUPPORTED_SYN_OPTIMIZERS)
         self.smooth_warp_sigma_edit = QLineEdit()
         self.smooth_grad_sigma_edit = QLineEdit()
         self.preview_max_side_edit = QLineEdit()
@@ -232,9 +254,19 @@ class MainWindow(QMainWindow):
             self.advanced_profile_button,
             self.loss_combo,
             self.cc_kernel_edit,
+            self.winsorize_enabled_check,
+            self.winsorize_lower_edit,
+            self.winsorize_upper_edit,
             self.moments_scale_edit,
             self.moments_order_edit,
             self.moments_orientation_combo,
+            self.rigid_loss_combo,
+            self.rigid_mi_bins_edit,
+            self.rigid_scales_edit,
+            self.rigid_iterations_edit,
+            self.rigid_lr_edit,
+            self.affine_loss_combo,
+            self.affine_mi_bins_edit,
             self.affine_scales_edit,
             self.affine_iterations_edit,
             self.affine_lr_edit,
@@ -244,6 +276,12 @@ class MainWindow(QMainWindow):
             self.greedy_optimizer_combo,
             self.greedy_reset_check,
             self.greedy_offload_check,
+            self.syn_loss_combo,
+            self.syn_cc_kernel_edit,
+            self.syn_scales_edit,
+            self.syn_iterations_edit,
+            self.syn_lr_edit,
+            self.syn_optimizer_combo,
             self.smooth_warp_sigma_edit,
             self.smooth_grad_sigma_edit,
             self.preview_enabled_check,
@@ -291,50 +329,84 @@ class MainWindow(QMainWindow):
         profile_layout = QVBoxLayout(profile_body)
         profile_layout.setContentsMargins(8, 8, 8, 8)
         profile_layout.setSpacing(8)
-        profile_layout.addWidget(self._profile_group("Loss", [("Type", self.loss_combo), ("CC kernel", self.cc_kernel_edit)]))
-        profile_layout.addWidget(
-            self._profile_group(
-                "Moments",
-                [
-                    ("Scale", self.moments_scale_edit),
-                    ("Order", self.moments_order_edit),
-                    ("Orientation", self.moments_orientation_combo),
-                ],
-            )
+        self.loss_group = self._profile_group("Loss", [("Type", self.loss_combo), ("CC kernel", self.cc_kernel_edit)])
+        self.preprocess_group = self._profile_group(
+            "Preprocess",
+            [
+                ("Winsorize", self.winsorize_enabled_check),
+                ("Lower", self.winsorize_lower_edit),
+                ("Upper", self.winsorize_upper_edit),
+            ],
         )
-        profile_layout.addWidget(
-            self._profile_group(
-                "Affine",
-                [
-                    ("Scales", self.affine_scales_edit),
-                    ("Iterations", self.affine_iterations_edit),
-                    ("LR", self.affine_lr_edit),
-                ],
-            )
+        self.moments_group = self._profile_group(
+            "Moments",
+            [
+                ("Scale", self.moments_scale_edit),
+                ("Order", self.moments_order_edit),
+                ("Orientation", self.moments_orientation_combo),
+            ],
         )
-        profile_layout.addWidget(
-            self._profile_group(
-                "Greedy",
-                [
-                    ("Scales", self.greedy_scales_edit),
-                    ("Iterations", self.greedy_iterations_edit),
-                    ("LR", self.greedy_lr_edit),
-                    ("Optimizer", self.greedy_optimizer_combo),
-                    ("Adam state", self.greedy_flags_widget),
-                ],
-            )
+        self.rigid_group = self._profile_group(
+            "Rigid",
+            [
+                ("Metric", self.rigid_loss_combo),
+                ("MI bins", self.rigid_mi_bins_edit),
+                ("Scales", self.rigid_scales_edit),
+                ("Iterations", self.rigid_iterations_edit),
+                ("LR", self.rigid_lr_edit),
+            ],
         )
-        profile_layout.addWidget(
-            self._profile_group(
-                "Preview",
-                [
-                    ("Live", self.preview_enabled_check),
-                    ("Max side", self.preview_max_side_edit),
-                    ("Warp sigma", self.smooth_warp_sigma_edit),
-                    ("Grad sigma", self.smooth_grad_sigma_edit),
-                ],
-            )
+        self.affine_group = self._profile_group(
+            "Affine",
+            [
+                ("Metric", self.affine_loss_combo),
+                ("MI bins", self.affine_mi_bins_edit),
+                ("Scales", self.affine_scales_edit),
+                ("Iterations", self.affine_iterations_edit),
+                ("LR", self.affine_lr_edit),
+            ],
         )
+        self.greedy_group = self._profile_group(
+            "Greedy",
+            [
+                ("Scales", self.greedy_scales_edit),
+                ("Iterations", self.greedy_iterations_edit),
+                ("LR", self.greedy_lr_edit),
+                ("Optimizer", self.greedy_optimizer_combo),
+                ("Adam state", self.greedy_flags_widget),
+            ],
+        )
+        self.syn_group = self._profile_group(
+            "SyN",
+            [
+                ("Metric", self.syn_loss_combo),
+                ("CC kernel", self.syn_cc_kernel_edit),
+                ("Scales", self.syn_scales_edit),
+                ("Iterations", self.syn_iterations_edit),
+                ("LR", self.syn_lr_edit),
+                ("Optimizer", self.syn_optimizer_combo),
+            ],
+        )
+        self.preview_group = self._profile_group(
+            "Preview",
+            [
+                ("Live", self.preview_enabled_check),
+                ("Max side", self.preview_max_side_edit),
+                ("Warp sigma", self.smooth_warp_sigma_edit),
+                ("Grad sigma", self.smooth_grad_sigma_edit),
+            ],
+        )
+        for group in (
+            self.loss_group,
+            self.preprocess_group,
+            self.moments_group,
+            self.rigid_group,
+            self.affine_group,
+            self.greedy_group,
+            self.syn_group,
+            self.preview_group,
+        ):
+            profile_layout.addWidget(group)
         profile_layout.addStretch(1)
         profile_scroll.setWidget(profile_body)
         self.sidebar_tabs.addTab(profile_scroll, "Profile")
@@ -349,13 +421,30 @@ class MainWindow(QMainWindow):
             layout.addRow(label, widget)
         return group
 
+    def _set_form_row_visible(self, widget: QWidget, visible: bool) -> None:
+        widget.setVisible(visible)
+        layout = widget.parentWidget().layout() if widget.parentWidget() is not None else None
+        if isinstance(layout, QFormLayout):
+            label = layout.labelForField(widget)
+            if label is not None:
+                label.setVisible(visible)
+
     def _set_compact_profile_field_widths(self) -> None:
         for widget in (
             self.loss_combo,
             self.cc_kernel_edit,
+            self.winsorize_lower_edit,
+            self.winsorize_upper_edit,
             self.moments_scale_edit,
             self.moments_order_edit,
             self.moments_orientation_combo,
+            self.rigid_loss_combo,
+            self.rigid_mi_bins_edit,
+            self.rigid_scales_edit,
+            self.rigid_iterations_edit,
+            self.rigid_lr_edit,
+            self.affine_loss_combo,
+            self.affine_mi_bins_edit,
             self.affine_scales_edit,
             self.affine_iterations_edit,
             self.affine_lr_edit,
@@ -363,6 +452,12 @@ class MainWindow(QMainWindow):
             self.greedy_iterations_edit,
             self.greedy_lr_edit,
             self.greedy_optimizer_combo,
+            self.syn_loss_combo,
+            self.syn_cc_kernel_edit,
+            self.syn_scales_edit,
+            self.syn_iterations_edit,
+            self.syn_lr_edit,
+            self.syn_optimizer_combo,
             self.smooth_warp_sigma_edit,
             self.smooth_grad_sigma_edit,
             self.preview_max_side_edit,
@@ -412,11 +507,21 @@ class MainWindow(QMainWindow):
         if profile_name not in REGISTRATION_PROFILE_NAMES:
             profile_name = REGISTRATION_PROFILE_NAMES[0]
         settings = registration_settings_for_profile(profile_name)
+        settings.winsorize_enabled = _as_bool(self.settings_store.value("profile/winsorize_enabled", settings.winsorize_enabled))
+        settings.winsorize_lower = float(self.settings_store.value("profile/winsorize_lower", settings.winsorize_lower))
+        settings.winsorize_upper = float(self.settings_store.value("profile/winsorize_upper", settings.winsorize_upper))
         settings.loss_type = str(self.settings_store.value("profile/loss_type", settings.loss_type))
         settings.cc_kernel_size = int(self.settings_store.value("profile/cc_kernel_size", settings.cc_kernel_size))
         settings.moments_scale = float(self.settings_store.value("profile/moments_scale", settings.moments_scale))
         settings.moments_order = int(self.settings_store.value("profile/moments_order", settings.moments_order))
         settings.moments_orientation = str(self.settings_store.value("profile/moments_orientation", settings.moments_orientation))
+        settings.rigid_loss_type = str(self.settings_store.value("profile/rigid_loss_type", settings.rigid_loss_type))
+        settings.rigid_mi_bins = int(self.settings_store.value("profile/rigid_mi_bins", settings.rigid_mi_bins))
+        settings.rigid_scales = parse_float_list(str(self.settings_store.value("profile/rigid_scales", _format_number_list(settings.rigid_scales))), "Rigid scales")
+        settings.rigid_iterations = parse_int_list(str(self.settings_store.value("profile/rigid_iterations", _format_number_list(settings.rigid_iterations))), "Rigid iterations")
+        settings.rigid_lr = float(self.settings_store.value("profile/rigid_lr", settings.rigid_lr))
+        settings.affine_loss_type = str(self.settings_store.value("profile/affine_loss_type", settings.affine_loss_type))
+        settings.affine_mi_bins = int(self.settings_store.value("profile/affine_mi_bins", settings.affine_mi_bins))
         settings.affine_scales = parse_float_list(str(self.settings_store.value("profile/affine_scales", _format_number_list(settings.affine_scales))), "Affine scales")
         settings.affine_iterations = parse_int_list(str(self.settings_store.value("profile/affine_iterations", _format_number_list(settings.affine_iterations))), "Affine iterations")
         settings.affine_lr = float(self.settings_store.value("profile/affine_lr", settings.affine_lr))
@@ -426,6 +531,12 @@ class MainWindow(QMainWindow):
         settings.greedy_optimizer = str(self.settings_store.value("profile/greedy_optimizer", settings.greedy_optimizer))
         settings.greedy_reset = _as_bool(self.settings_store.value("profile/greedy_reset", settings.greedy_reset))
         settings.greedy_offload = _as_bool(self.settings_store.value("profile/greedy_offload", settings.greedy_offload))
+        settings.syn_loss_type = str(self.settings_store.value("profile/syn_loss_type", settings.syn_loss_type))
+        settings.syn_cc_kernel_size = int(self.settings_store.value("profile/syn_cc_kernel_size", settings.syn_cc_kernel_size))
+        settings.syn_scales = parse_float_list(str(self.settings_store.value("profile/syn_scales", _format_number_list(settings.syn_scales))), "SyN scales")
+        settings.syn_iterations = parse_int_list(str(self.settings_store.value("profile/syn_iterations", _format_number_list(settings.syn_iterations))), "SyN iterations")
+        settings.syn_lr = float(self.settings_store.value("profile/syn_lr", settings.syn_lr))
+        settings.syn_optimizer = str(self.settings_store.value("profile/syn_optimizer", settings.syn_optimizer))
         settings.smooth_warp_sigma = float(self.settings_store.value("profile/smooth_warp_sigma", settings.smooth_warp_sigma))
         settings.smooth_grad_sigma = float(self.settings_store.value("profile/smooth_grad_sigma", settings.smooth_grad_sigma))
         settings.preview_enabled = _as_bool(self.settings_store.value("profile/preview_enabled", settings.preview_enabled))
@@ -446,11 +557,30 @@ class MainWindow(QMainWindow):
         self.sidebar_tabs.setCurrentIndex(1)
 
     def _apply_settings_to_fields(self, settings: RegistrationSettings) -> None:
+        ants_pipeline = settings.pipeline == PIPELINE_ANTS_RIGID_AFFINE_SYN
+        self.loss_group.setVisible(not ants_pipeline)
+        self.preprocess_group.setVisible(ants_pipeline)
+        self.moments_group.setVisible(not ants_pipeline)
+        self.rigid_group.setVisible(ants_pipeline)
+        self.greedy_group.setVisible(not ants_pipeline)
+        self.syn_group.setVisible(ants_pipeline)
+        self._set_form_row_visible(self.affine_loss_combo, ants_pipeline)
+        self._set_form_row_visible(self.affine_mi_bins_edit, ants_pipeline)
         self.loss_combo.setCurrentText(settings.loss_type)
         self.cc_kernel_edit.setText(str(settings.cc_kernel_size))
+        self.winsorize_enabled_check.setChecked(settings.winsorize_enabled)
+        self.winsorize_lower_edit.setText(_format_number(settings.winsorize_lower))
+        self.winsorize_upper_edit.setText(_format_number(settings.winsorize_upper))
         self.moments_scale_edit.setText(_format_number(settings.moments_scale))
         self.moments_order_edit.setText(str(settings.moments_order))
         self.moments_orientation_combo.setCurrentText(settings.moments_orientation)
+        self.rigid_loss_combo.setCurrentText(settings.rigid_loss_type)
+        self.rigid_mi_bins_edit.setText(str(settings.rigid_mi_bins))
+        self.rigid_scales_edit.setText(_format_number_list(settings.rigid_scales))
+        self.rigid_iterations_edit.setText(_format_number_list(settings.rigid_iterations))
+        self.rigid_lr_edit.setText(str(settings.rigid_lr))
+        self.affine_loss_combo.setCurrentText(settings.affine_loss_type)
+        self.affine_mi_bins_edit.setText(str(settings.affine_mi_bins))
         self.affine_scales_edit.setText(_format_number_list(settings.affine_scales))
         self.affine_iterations_edit.setText(_format_number_list(settings.affine_iterations))
         self.affine_lr_edit.setText(str(settings.affine_lr))
@@ -460,18 +590,34 @@ class MainWindow(QMainWindow):
         self.greedy_optimizer_combo.setCurrentText(settings.greedy_optimizer)
         self.greedy_reset_check.setChecked(settings.greedy_reset)
         self.greedy_offload_check.setChecked(settings.greedy_offload)
+        self.syn_loss_combo.setCurrentText(settings.syn_loss_type)
+        self.syn_cc_kernel_edit.setText(str(settings.syn_cc_kernel_size))
+        self.syn_scales_edit.setText(_format_number_list(settings.syn_scales))
+        self.syn_iterations_edit.setText(_format_number_list(settings.syn_iterations))
+        self.syn_lr_edit.setText(str(settings.syn_lr))
+        self.syn_optimizer_combo.setCurrentText(settings.syn_optimizer)
         self.smooth_warp_sigma_edit.setText(_format_number(settings.smooth_warp_sigma))
         self.smooth_grad_sigma_edit.setText(_format_number(settings.smooth_grad_sigma))
         self.preview_enabled_check.setChecked(settings.preview_enabled)
         self.preview_max_side_edit.setText(str(settings.preview_max_side))
 
     def _settings_from_profile_fields(self) -> RegistrationSettings:
-        settings = RegistrationSettings.default()
+        settings = registration_settings_for_profile(self.profile_combo.currentText())
         settings.loss_type = self.loss_combo.currentText()
         settings.cc_kernel_size = int(self.cc_kernel_edit.text())
+        settings.winsorize_enabled = self.winsorize_enabled_check.isChecked()
+        settings.winsorize_lower = float(self.winsorize_lower_edit.text())
+        settings.winsorize_upper = float(self.winsorize_upper_edit.text())
         settings.moments_scale = float(self.moments_scale_edit.text())
         settings.moments_order = int(self.moments_order_edit.text())
         settings.moments_orientation = self.moments_orientation_combo.currentText()
+        settings.rigid_loss_type = self.rigid_loss_combo.currentText()
+        settings.rigid_mi_bins = int(self.rigid_mi_bins_edit.text())
+        settings.rigid_scales = parse_float_list(self.rigid_scales_edit.text(), "Rigid scales")
+        settings.rigid_iterations = parse_int_list(self.rigid_iterations_edit.text(), "Rigid iterations")
+        settings.rigid_lr = float(self.rigid_lr_edit.text())
+        settings.affine_loss_type = self.affine_loss_combo.currentText()
+        settings.affine_mi_bins = int(self.affine_mi_bins_edit.text())
         settings.affine_scales = parse_float_list(self.affine_scales_edit.text(), "Affine scales")
         settings.affine_iterations = parse_int_list(self.affine_iterations_edit.text(), "Affine iterations")
         settings.affine_lr = float(self.affine_lr_edit.text())
@@ -481,6 +627,12 @@ class MainWindow(QMainWindow):
         settings.greedy_optimizer = self.greedy_optimizer_combo.currentText()
         settings.greedy_reset = self.greedy_reset_check.isChecked()
         settings.greedy_offload = self.greedy_offload_check.isChecked()
+        settings.syn_loss_type = self.syn_loss_combo.currentText()
+        settings.syn_cc_kernel_size = int(self.syn_cc_kernel_edit.text())
+        settings.syn_scales = parse_float_list(self.syn_scales_edit.text(), "SyN scales")
+        settings.syn_iterations = parse_int_list(self.syn_iterations_edit.text(), "SyN iterations")
+        settings.syn_lr = float(self.syn_lr_edit.text())
+        settings.syn_optimizer = self.syn_optimizer_combo.currentText()
         settings.smooth_warp_sigma = float(self.smooth_warp_sigma_edit.text())
         settings.smooth_grad_sigma = float(self.smooth_grad_sigma_edit.text())
         settings.preview_enabled = self.preview_enabled_check.isChecked()
@@ -490,11 +642,21 @@ class MainWindow(QMainWindow):
 
     def _save_profile_settings(self, settings: RegistrationSettings) -> None:
         self.settings_store.setValue("profile/name", self.profile_combo.currentText())
+        self.settings_store.setValue("profile/winsorize_enabled", settings.winsorize_enabled)
+        self.settings_store.setValue("profile/winsorize_lower", settings.winsorize_lower)
+        self.settings_store.setValue("profile/winsorize_upper", settings.winsorize_upper)
         self.settings_store.setValue("profile/loss_type", settings.loss_type)
         self.settings_store.setValue("profile/cc_kernel_size", settings.cc_kernel_size)
         self.settings_store.setValue("profile/moments_scale", settings.moments_scale)
         self.settings_store.setValue("profile/moments_order", settings.moments_order)
         self.settings_store.setValue("profile/moments_orientation", settings.moments_orientation)
+        self.settings_store.setValue("profile/rigid_loss_type", settings.rigid_loss_type)
+        self.settings_store.setValue("profile/rigid_mi_bins", settings.rigid_mi_bins)
+        self.settings_store.setValue("profile/rigid_scales", _format_number_list(settings.rigid_scales))
+        self.settings_store.setValue("profile/rigid_iterations", _format_number_list(settings.rigid_iterations))
+        self.settings_store.setValue("profile/rigid_lr", settings.rigid_lr)
+        self.settings_store.setValue("profile/affine_loss_type", settings.affine_loss_type)
+        self.settings_store.setValue("profile/affine_mi_bins", settings.affine_mi_bins)
         self.settings_store.setValue("profile/affine_scales", _format_number_list(settings.affine_scales))
         self.settings_store.setValue("profile/affine_iterations", _format_number_list(settings.affine_iterations))
         self.settings_store.setValue("profile/affine_lr", settings.affine_lr)
@@ -504,6 +666,12 @@ class MainWindow(QMainWindow):
         self.settings_store.setValue("profile/greedy_optimizer", settings.greedy_optimizer)
         self.settings_store.setValue("profile/greedy_reset", settings.greedy_reset)
         self.settings_store.setValue("profile/greedy_offload", settings.greedy_offload)
+        self.settings_store.setValue("profile/syn_loss_type", settings.syn_loss_type)
+        self.settings_store.setValue("profile/syn_cc_kernel_size", settings.syn_cc_kernel_size)
+        self.settings_store.setValue("profile/syn_scales", _format_number_list(settings.syn_scales))
+        self.settings_store.setValue("profile/syn_iterations", _format_number_list(settings.syn_iterations))
+        self.settings_store.setValue("profile/syn_lr", settings.syn_lr)
+        self.settings_store.setValue("profile/syn_optimizer", settings.syn_optimizer)
         self.settings_store.setValue("profile/smooth_warp_sigma", settings.smooth_warp_sigma)
         self.settings_store.setValue("profile/smooth_grad_sigma", settings.smooth_grad_sigma)
         self.settings_store.setValue("profile/preview_enabled", settings.preview_enabled)

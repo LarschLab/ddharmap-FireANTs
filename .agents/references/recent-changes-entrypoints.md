@@ -16,6 +16,14 @@ Purpose: append completed meaningful entrypoint, docs, tutorial, or script work.
 
 ## Log
 
+## 2026-05-18 - ANTs-like SyN GUI profile
+
+- Slice goal: add a GUI registration profile that mirrors the user's prior ANTs stage structure without expanding CLI compatibility.
+- Passes completed: added an `ANTs-like SyN` profile with Rigid -> Affine -> SyN execution, per-stage MI/CC settings, winsorization controls, and stage-specific GUI cards; benchmarked the L765_f01 fixed / L765_f03 moving TIFF pair on MPS.
+- What changed: `fireants.gui.runner` can branch between the existing Moments/Affine/Greedy workflow and the new ANTs-like SyN workflow; GUI settings persistence, metrics CSV timing fields, and offscreen profile controls understand the new pipeline. Large-tensor winsorization samples quantiles instead of calling full flattened `torch.quantile`; the ANTs-like SyN profile uses SGD with `compose_n=1`; SyN GUI previews are skipped to avoid inverse-warp preview work; SyN export/evaluation can route warp-parameter interpolation through CPU; tensor-backed fake image batches keep metadata on the tensor device.
+- Rerun implications: use `ANTs-like SyN` from the GUI Profile dropdown for ANTs-inspired runs; the prior `quantile() input tensor is too large` and MPS full-resolution SyN allocation blockers are fixed. Current L765_f03 benchmark completes but worsens proxy metrics, so tune quality before running additional pairs.
+- Validation performed: `python -m compileall -q fireants/gui fireants/io/image.py fireants/registration/syn.py tests/test_gui_runner.py`; `python -m pytest -q tests/test_gui_runner.py`; completed one-pair MPS benchmark under `/Volumes/dataDrive/dataProcessing/FireANTs/testReg/fireants_gui_run_ants_like_syn_mps_l765_f03_20260518_095903` with valid warped/warp geometry and worsened proxy metrics (`NCC 0.169474 -> 0.022831`).
+
 ## 2026-05-17 - compact GUI profile layout
 
 - Slice goal: make the profile-enabled GUI usable on smaller displays after full-width parameter fields consumed too much vertical space.

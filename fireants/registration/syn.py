@@ -146,7 +146,14 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
             raise ValueError('Invalid initial affine shape: {}'.format(init_affine.shape))
 
 
-    def get_warp_parameters(self, fixed_images: Union[BatchedImages, FakeBatchedImages], moving_images: Union[BatchedImages, FakeBatchedImages], shape=None, displacement=False):
+    def get_warp_parameters(
+        self,
+        fixed_images: Union[BatchedImages, FakeBatchedImages],
+        moving_images: Union[BatchedImages, FakeBatchedImages],
+        shape=None,
+        displacement=False,
+        interpolation_device: Optional[torch.device] = None,
+    ):
         """Get transformed coordinates for warping the moving image.
 
         Computes the coordinate transformation from fixed to moving image space
@@ -168,21 +175,28 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
                 Shape: [N, H, W, [D], dims]
         """
         fixed_arrays = fixed_images()
+        working_device = interpolation_device or fixed_arrays.device
+        if interpolation_device is not None:
+            fixed_arrays = fixed_arrays.to(interpolation_device)
+            fixed_images_for_inverse = FakeBatchedImages(fixed_arrays, fixed_images)
+        else:
+            fixed_images_for_inverse = fixed_images
 
         if shape is None:
             shape = fixed_images.shape
         else:
             shape = [fixed_arrays.shape[0], 1] + list(shape) 
 
-        fixed_t2p = fixed_images.get_torch2phy().to(self.dtype)
-        moving_p2t = moving_images.get_phy2torch().to(self.dtype)
+        fixed_t2p = fixed_images.get_torch2phy().to(device=working_device, dtype=self.dtype)
+        moving_p2t = moving_images.get_phy2torch().to(device=working_device, dtype=self.dtype)
         # fixed_size = fixed_arrays.shape[2:]
         # save init transform
         # init_grid = torch.eye(self.dims, self.dims+1).to(fixed_images.device, self.dtype).unsqueeze(0).repeat(fixed_images.size(), 1, 1)  # [N, dims, dims+1]
-        affine_map_init = (torch.matmul(moving_p2t, torch.matmul(self.affine, fixed_t2p))[:, :-1]).contiguous().to(self.dtype)
+        affine = self.affine.to(device=working_device, dtype=self.dtype)
+        affine_map_init = (torch.matmul(moving_p2t, torch.matmul(affine, fixed_t2p))[:, :-1]).contiguous().to(self.dtype)
         # fixed_image_vgrid  = F.affine_grid(init_grid, fixed_arrays.shape, align_corners=True)
         # get warps
-        fwd_warp_field = self.fwd_warp.get_warp()  # [N, HWD, 3]
+        fwd_warp_field = self.fwd_warp.get_warp().to(working_device)  # [N, HWD, 3]
         if tuple(fwd_warp_field.shape[1:-1]) != tuple(shape[2:]):
             # interpolate this
             fwd_warp_field = device_aware_interpolate(
@@ -193,10 +207,11 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
             ).permute(*self.fwd_warp.permute_imgtov)
 
         # compute inverse of rev_warp with the size of `fixed_images`
-        rev_inv_warp_field = compositive_warp_inverse(fixed_images, self.rev_warp.get_warp(), displacement=True, scales=self.scales, iterations=self.iterations)
+        rev_warp_field = self.rev_warp.get_warp().to(working_device)
+        rev_inv_warp_field = compositive_warp_inverse(fixed_images_for_inverse, rev_warp_field, displacement=True, scales=self.scales, iterations=self.iterations)
         if tuple(rev_inv_warp_field.shape[1:-1]) != tuple(shape[2:]):
             rev_inv_warp_field = device_aware_interpolate(
-                self.rev_warp.get_warp().permute(*self.rev_warp.permute_vtoimg),
+                rev_warp_field.permute(*self.rev_warp.permute_vtoimg),
                 size=shape[2:],
                 mode="trilinear",
                 align_corners=True,

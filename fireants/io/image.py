@@ -544,10 +544,22 @@ class FakeBatchedImages:
         return self.tensor
 
     def get_torch2phy(self):
-        return self.batched_images.torch2phy
+        return self.batched_images.torch2phy.to(self.tensor.device)
 
     def get_phy2torch(self):
-        return self.batched_images.phy2torch
+        return self.batched_images.phy2torch.to(self.tensor.device)
+
+    def get_torch2px(self):
+        return self.batched_images.torch2px.to(self.tensor.device)
+
+    def get_px2torch(self):
+        return self.batched_images.px2torch.to(self.tensor.device)
+
+    def get_px2phy(self):
+        return self.batched_images.px2phy.to(self.tensor.device)
+
+    def get_phy2px(self):
+        return self.batched_images.phy2px.to(self.tensor.device)
 
     def size(self):
         return self.tensor.shape[0]
