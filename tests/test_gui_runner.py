@@ -196,8 +196,8 @@ def test_registration_profile_presets_and_validation():
     ants_like = registration_settings_for_profile("ANTs-like SyN")
     assert ants_like.pipeline == PIPELINE_ANTS_RIGID_AFFINE_SYN
     assert ants_like.winsorize_enabled
-    assert ants_like.rigid_loss_type == "mi"
-    assert ants_like.affine_loss_type == "mi"
+    assert ants_like.rigid_loss_type == "mse"
+    assert ants_like.affine_loss_type == "mse"
     assert ants_like.syn_loss_type == "cc"
     assert ants_like.syn_optimizer == "SGD"
     assert ants_like.syn_optimizer_params == {"compose_n": 1}
@@ -377,8 +377,12 @@ def test_run_batch_registration_ants_like_syn_profile_smoke(tmp_path):
     )
 
     row_dir = output / "moving_bridge"
+    warped_path = row_dir / "moving_bridge_warped.nii.gz"
     assert (row_dir / "moving_bridge_0Warp.nii.gz").exists()
-    assert (row_dir / "moving_bridge_warped.nii.gz").exists()
+    assert warped_path.exists()
+    warped = sitk.GetArrayFromImage(sitk.ReadImage(str(warped_path)))
+    assert np.isfinite(warped).all()
+    assert np.count_nonzero(warped) > 0
     stages = [event.get("stage") for event in events if event.get("event") == "registration_progress"]
     assert "Rigid" in stages
     assert "Affine" in stages
@@ -388,6 +392,53 @@ def test_run_batch_registration_ants_like_syn_profile_smoke(tmp_path):
     assert rows[0]["pipeline"] == PIPELINE_ANTS_RIGID_AFFINE_SYN
     assert rows[0]["rigid_seconds"] != ""
     assert rows[0]["syn_seconds"] != ""
+    assert np.isfinite(float(rows[0]["final_mse"]))
+    assert np.isfinite(float(rows[0]["final_ncc"]))
+
+
+def test_run_batch_registration_rejects_invalid_warped_output(tmp_path, monkeypatch):
+    from fireants.gui import runner as gui_runner
+
+    fixed = tmp_path / "fixed_bridge.mha"
+    moving = tmp_path / "moving_bridge.mha"
+    output = tmp_path / "out"
+    metrics_dir = output / "_metrics"
+    _write_image(fixed)
+    _write_image(moving, offset=1)
+    events = []
+
+    def zero_evaluate(self, fixed_images, moving_images, *args, **kwargs):
+        return torch.zeros_like(fixed_images())
+
+    monkeypatch.setattr(gui_runner.GreedyRegistration, "evaluate", zero_evaluate)
+    settings = RegistrationSettings(
+        device="cpu",
+        loss_type="mse",
+        affine_scales=[1],
+        affine_iterations=[1],
+        greedy_scales=[1],
+        greedy_iterations=[1],
+        preview_enabled=False,
+        progress_bar=False,
+        metrics_dir=metrics_dir,
+    )
+
+    with pytest.raises(ValueError, match="all zero"):
+        run_batch_registration(
+            fixed,
+            [RegistrationJob(moving_bridge=moving, warp_files=[])],
+            output,
+            settings=settings,
+            progress_callback=events.append,
+        )
+
+    warped_path = output / "moving_bridge" / "moving_bridge_warped.nii.gz"
+    assert not warped_path.exists()
+    assert any(event["event"] == "warp_validation_failed" for event in events)
+    with (metrics_dir / "pairs.csv").open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows[0]["status"] == "failed"
+    assert "all zero" in rows[0]["error"]
 
 
 def test_winsorize_tensor_samples_large_inputs():
@@ -469,6 +520,30 @@ def test_gui_profile_fields_build_settings_offscreen(tmp_path, monkeypatch):
     assert not window.syn_group.isHidden()
     assert window.moments_group.isHidden()
     assert window.greedy_group.isHidden()
+    window.close()
+
+
+def test_gui_help_hover_preserves_status_bar_message(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    pytest.importorskip("PySide6")
+    from PySide6.QtCore import QEvent, QSettings
+    from PySide6.QtWidgets import QApplication
+    from fireants.gui.app import MainWindow
+
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(tmp_path))
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    message = "Stack 1/2: SyN scale 2 iter 20/50"
+    window.statusBar().showMessage(message)
+
+    assert "Compute device" in window.device_edit.toolTip()
+    assert window.device_edit.statusTip() == ""
+    assert window.add_fixed_action.statusTip() == ""
+    QApplication.sendEvent(window.device_edit, QEvent(QEvent.Type.Enter))
+    app.processEvents()
+
+    assert window.statusBar().currentMessage() == message
     window.close()
 
 
@@ -669,3 +744,29 @@ def test_rigid_registration_emits_progress_events(tmp_path):
     assert events[0]["event"] == "stage_start"
     assert any(event["event"] == "iteration" for event in events)
     assert events[-1]["event"] == "stage_complete"
+
+
+def test_rigid_registration_rejects_nonfinite_loss(tmp_path):
+    class NaNLoss(torch.nn.Module):
+        def forward(self, pred, target):
+            return pred.sum() * torch.tensor(float("nan"), device=pred.device)
+
+    fixed = tmp_path / "fixed.mha"
+    moving = tmp_path / "moving.mha"
+    _write_image(fixed)
+    _write_image(moving, offset=1)
+    fixed_batch = BatchedImages([Image.load_file(str(fixed), device="cpu")])
+    moving_batch = BatchedImages([Image.load_file(str(moving), device="cpu")])
+
+    reg = RigidRegistration(
+        scales=[1],
+        iterations=[1],
+        fixed_images=fixed_batch,
+        moving_images=moving_batch,
+        loss_type="custom",
+        custom_loss=NaNLoss(),
+        progress_bar=False,
+    )
+
+    with pytest.raises(FloatingPointError, match="Rigid produced non-finite loss"):
+        reg.optimize()

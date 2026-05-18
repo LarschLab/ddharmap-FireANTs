@@ -331,6 +331,23 @@ Implementation ideas if profile tuning is not enough:
 
 Quality caveat: the CPU full-default gate completed but degraded proxy metrics, so lower-memory profiles must be judged by both completion and registration quality.
 
+## 2026-05-18 ANTs-like Empty-Stack Diagnosis
+
+The GUI run below reproduced the apparent empty-stack failure:
+
+```text
+/Users/ddharmap/dataProcessing/testReg/fireants_gui_run_20260518_163916
+```
+
+Both ANTs-like SyN rows were marked complete, but the warped NIfTI outputs contained only zeros and the final metrics were `NaN`. The event stream showed non-finite losses during Rigid/Affine/SyN before transform saving, so the empty stacks were a numerical divergence symptom rather than a SimpleITK write failure.
+
+Follow-up fix:
+
+- GUI hover help no longer writes to the bottom status bar.
+- Rigid, Affine, and SyN now fail immediately on non-finite loss or transform state.
+- GUI output writing now rejects non-finite, all-zero, or constant warped outputs for nonzero source images.
+- The ANTs-like SyN GUI preset keeps the same stage order but uses `mse` for Rigid and Affine to avoid the known MI-on-MPS TIFF divergence path.
+
 ## Useful Commands
 
 Focused GUI runner tests:

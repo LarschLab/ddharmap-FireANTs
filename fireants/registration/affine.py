@@ -299,8 +299,10 @@ class AffineRegistration(AbstractRegistration):
                                 out_shape=fixed_image_down.shape, mode='bilinear', align_corners=True)  # [N, C, H, W, [D]]
                 # calculate loss function
                 loss = self.loss_fn(moved_image, fixed_image_down)
+                self._ensure_finite_tensor(loss, "Affine", scale, i + 1, "loss")
                 loss.backward()
                 self.optimizer.step()
+                self._ensure_finite_tensor(self.affine, "Affine", scale, i + 1, "affine parameters")
                 # check for convergence
                 cur_loss = loss.item()
                 if self.convergence_monitor.converged(cur_loss):

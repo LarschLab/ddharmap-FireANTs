@@ -72,7 +72,7 @@ QUEUE_DROP_STYLE = "QListWidget { border: 2px solid #4ca3ff; }"
 def _set_help(widget, text: str) -> None:
     widget.setToolTip(text)
     if hasattr(widget, "setStatusTip"):
-        widget.setStatusTip(text)
+        widget.setStatusTip("")
 
 
 def is_supported_image_path(path: Path) -> bool:

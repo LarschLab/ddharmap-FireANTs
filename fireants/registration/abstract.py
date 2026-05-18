@@ -193,6 +193,10 @@ class AbstractRegistration(ABC):
         event.setdefault("registration", self.__class__.__name__)
         emit_progress(self.progress_callback, **event)
 
+    def _ensure_finite_tensor(self, tensor: torch.Tensor, stage: str, scale: Any, iteration: int, name: str) -> None:
+        if not torch.isfinite(tensor.detach()).all().cpu().item():
+            raise FloatingPointError(f"{stage} produced non-finite {name} at scale {scale}, iteration {iteration}")
+
     def _split_image_and_mask_last_channel(self, arrays: torch.Tensor):
         """Split arrays into (image_channels, mask_channel) if in masked mode.
 

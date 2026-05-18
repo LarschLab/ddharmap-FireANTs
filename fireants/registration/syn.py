@@ -336,12 +336,15 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
                 if self.displacement_reg is not None:
                     loss = loss + self.displacement_reg(fwd_warp_field) + self.displacement_reg(rev_warp_field)
                 # backward
+                self._ensure_finite_tensor(loss, "SyN", scale, i + 1, "loss")
                 loss.backward()
                 if self.progress_bar:
                     pbar.set_description("scale: {}, iter: {}/{}, loss: {:4f}".format(scale, i, iters, loss.item()/scale_factor))
                 # optimize the deformations
                 self.fwd_warp.step(loss)
                 self.rev_warp.step(loss)
+                self._ensure_finite_tensor(self.fwd_warp.get_warp(), "SyN", scale, i + 1, "forward warp")
+                self._ensure_finite_tensor(self.rev_warp.get_warp(), "SyN", scale, i + 1, "reverse warp")
                 cur_loss = loss.item()
                 if self.convergence_monitor.converged(cur_loss):
                     self._emit_progress(event="iteration", stage="SyN", scale=scale, iteration=i + 1, iterations=iters, loss=cur_loss / scale_factor, converged=True)

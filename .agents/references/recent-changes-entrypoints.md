@@ -16,6 +16,14 @@ Purpose: append completed meaningful entrypoint, docs, tutorial, or script work.
 
 ## Log
 
+## 2026-05-18 - GUI status and invalid warped output guard
+
+- Slice goal: keep hover help from overwriting live GUI run status and prevent corrupt warped stacks from being reported as successful.
+- Passes completed: removed status-tip assignment from GUI help text, kept native tooltips, tuned the ANTs-like SyN profile away from MI rigid/affine defaults, and added GUI-runner warped-output validation before writing files.
+- What changed: the status bar now remains reserved for persistent run/progress messages; invalid warped tensors with non-finite, all-zero, or constant output fail the row before `write_image`.
+- Rerun implications: ANTs-like runs should no longer silently complete with empty stacks; failed rows include a metrics error instead of a misleading complete status.
+- Validation performed: `python -m pytest -q tests/test_gui_runner.py`; offscreen screenshot `/tmp/fireants_gui_status_help_verified.png`; one-pair coarse L765 ANTs-like MPS smoke under `/var/folders/qg/mcw76_dj3gq7p4vz0sd2w_hh0000gn/T/fireants_ants_like_real_smoke_my9wrx_r`.
+
 ## 2026-05-18 - GUI drag-and-drop inputs
 
 - Slice goal: let users populate fixed and moving GUI inputs by dropping image files onto the relevant preview or queue target.

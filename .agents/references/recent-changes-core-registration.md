@@ -16,6 +16,14 @@ Purpose: append completed meaningful core registration work.
 
 ## Log
 
+## 2026-05-18 - Registration non-finite state guards
+
+- Slice goal: stop Rigid, Affine, and SyN optimization as soon as numerical divergence is detected.
+- Passes completed: added finite checks for per-iteration loss and learned transform state in the owner registration loops.
+- What changed: non-finite losses, affine/rigid parameters, or SyN warp fields now raise `FloatingPointError` with stage, scale, and iteration context before downstream transform saving.
+- Rerun implications: GUI and wrapper callers should see failed rows instead of completed runs with NaN metrics or empty outputs.
+- Validation performed: `python -m pytest -q tests/test_gui_runner.py`; `python -m pytest -q tests/test_mps_registration_smoke.py tests/test_moments_registration.py::TestMomentsRegistration3D::test_orientation_preserves_z_direction_by_default tests/test_moments_registration.py::TestMomentsRegistration3D::test_orientation_can_opt_out_of_z_direction_preservation`.
+
 ## 2026-05-18 - Moments Z-direction preservation
 
 - Slice goal: prevent 3D Moments orientation initialization from selecting a moving-Z reversing candidate by default.

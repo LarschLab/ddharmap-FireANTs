@@ -106,12 +106,12 @@ def registration_settings_for_profile(profile_name: str) -> RegistrationSettings
     if profile_name == "ANTs-like SyN":
         settings.pipeline = PIPELINE_ANTS_RIGID_AFFINE_SYN
         settings.winsorize_enabled = True
-        settings.rigid_loss_type = "mi"
+        settings.rigid_loss_type = "mse"
         settings.rigid_mi_bins = 32
         settings.rigid_scales = [12, 8, 4, 2]
         settings.rigid_iterations = [100, 100, 75, 25]
         settings.rigid_lr = 3e-2
-        settings.affine_loss_type = "mi"
+        settings.affine_loss_type = "mse"
         settings.affine_mi_bins = 32
         settings.affine_scales = [12, 8, 4, 2]
         settings.affine_iterations = [100, 100, 75, 25]
@@ -497,6 +497,11 @@ def run_batch_registration(
                     source_batch = BatchedImages([source_image])
                     interpolation_device = torch.device("cpu") if settings.device.startswith("mps") else None
                     moved = reg.evaluate(fixed_reg_batch, source_batch, interpolation_device=interpolation_device)
+                    try:
+                        _validate_warped_output(source_batch, moved)
+                    except ValueError as exc:
+                        emit(event="warp_validation_failed", row_index=row_index, source_path=str(source_path), error=str(exc))
+                        raise
                     moved_batch = FakeBatchedImages(moved, fixed_batch)
                     output_path = row_output_dir / f"{_file_stem(source_path)}_warped{settings.output_image_extension}"
                     moved_batch.write_image(str(output_path), permitted_ext=list(SUPPORTED_OUTPUT_IMAGE_EXTENSIONS))
@@ -570,6 +575,23 @@ def _winsorize_tensor(array: torch.Tensor, lower: float, upper: float, max_sampl
     if hi <= lo:
         return array
     return torch.clamp(array, min=lo, max=hi)
+
+
+def _validate_warped_output(source_batch: BatchedImages, moved: torch.Tensor) -> None:
+    moved_detached = moved.detach()
+    if not torch.isfinite(moved_detached).all().cpu().item():
+        raise ValueError("Warped output contains non-finite values")
+
+    source_has_signal = torch.count_nonzero(source_batch().detach()).cpu().item() > 0
+    if not source_has_signal:
+        return
+
+    if torch.count_nonzero(moved_detached).cpu().item() == 0:
+        raise ValueError("Warped output is all zero for a nonzero source image")
+    moved_min = moved_detached.amin()
+    moved_max = moved_detached.amax()
+    if torch.isclose(moved_min, moved_max, rtol=0.0, atol=1e-7).cpu().item():
+        raise ValueError("Warped output is constant for a nonzero source image")
 
 
 def _file_stem(path: Path) -> str:

@@ -366,8 +366,12 @@ class RigidRegistration(AbstractRegistration):
                 moved_image = fireants_interpolator(moving_image_blur, affine=mat.to(moving_image_blur.dtype), 
                                 out_shape=fixed_image_down.shape, mode='bilinear', align_corners=True)  # [N, C, H, W, [D]]
                 loss = self.loss_fn(moved_image, fixed_image_down) 
+                self._ensure_finite_tensor(loss, "Rigid", scale, i + 1, "loss")
                 loss.backward()
                 self.optimizer.step()
+                self._ensure_finite_tensor(self.rotation, "Rigid", scale, i + 1, "rotation")
+                self._ensure_finite_tensor(self.transl, "Rigid", scale, i + 1, "translation")
+                self._ensure_finite_tensor(self.logscale, "Rigid", scale, i + 1, "scale")
                 # check for convergence
                 cur_loss = loss.item()
                 if self.convergence_monitor.converged(cur_loss):
