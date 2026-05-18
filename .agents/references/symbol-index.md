@@ -47,8 +47,8 @@ Use this file when a task changes public surface, docs references, imports, or o
 ## Entrypoints
 
 - `cli/fireantsRegistration`: ANTs-like command-line registration wrapper.
-- `fireants.gui.runner.RegistrationSettings`: GUI runner settings for profile-controlled bridge registration, including loss/scales/iterations, Greedy optimizer state controls, metrics, and live-preview options.
-- `fireants.gui.runner.registration_settings_for_profile`: preset factory for GUI registration profiles (`Current Full`, `Memory Saver`, `Debug`).
+- `fireants.gui.runner.RegistrationSettings`: GUI runner settings for profile-controlled bridge registration, including loss/scales/iterations, Moments scaling, Greedy optimizer state controls, metrics, and live-preview options.
+- `fireants.gui.runner.registration_settings_for_profile`: preset factory for GUI registration profiles (`Current Full`, `Memory Saver`, `ANTs-like SyN`, `Debug`).
 - `fireants.gui.runner.validate_registration_settings`: shared GUI profile validation for runner and PySide entrypoint controls.
 - `fireants.gui.runner.run_batch_registration`: reusable bridge-stack batch runner for GUI workflows; registers moving bridge images to one fixed bridge image, applies the final transform to selected moving-side files, emits JSONL/CSV benchmark metrics through `RegistrationSettings.metrics_dir`, and can emit GUI-only live overlay preview events.
 - `fireants.gui.app`: optional PySide6 desktop GUI entrypoint exposed as `fireants-gui`.

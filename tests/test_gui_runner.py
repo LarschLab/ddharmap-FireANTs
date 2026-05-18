@@ -144,9 +144,14 @@ def test_run_batch_registration_records_failed_row_metrics(tmp_path):
 
 
 def test_registration_profile_presets_and_validation():
+    current_full = registration_settings_for_profile("Current Full")
+    assert current_full.moments_perform_scaling is True
+    validate_registration_settings(current_full)
+
     memory_saver = registration_settings_for_profile("Memory Saver")
     assert memory_saver.loss_type == "mse"
     assert memory_saver.moments_scale == 8
+    assert memory_saver.moments_perform_scaling is True
     assert memory_saver.greedy_scales == [4, 2]
     validate_registration_settings(memory_saver)
 
@@ -163,6 +168,7 @@ def test_registration_profile_presets_and_validation():
     debug = registration_settings_for_profile("Debug")
     assert debug.affine_iterations == [1]
     assert debug.greedy_iterations == [1]
+    assert debug.moments_perform_scaling is True
     validate_registration_settings(debug)
 
 
@@ -184,6 +190,13 @@ def test_validate_registration_settings_rejects_invalid_lists():
 
     with pytest.raises(ValueError, match="comma-separated"):
         parse_float_list("4, nope", "Affine scales")
+
+
+def test_validate_registration_settings_rejects_scaling_without_second_order_moments():
+    settings = RegistrationSettings(device="cpu", moments_order=1, moments_perform_scaling=True)
+
+    with pytest.raises(ValueError, match="Moments scaling requires moments order 2"):
+        validate_registration_settings(settings)
 
 
 def test_run_batch_registration_emits_preview_without_metrics_payload(tmp_path):
@@ -226,6 +239,45 @@ def test_run_batch_registration_emits_preview_without_metrics_payload(tmp_path):
 
     metric_events = [json.loads(line) for line in (metrics_dir / "events.jsonl").read_text().splitlines()]
     assert not any(event["event"] == "preview_update" for event in metric_events)
+
+
+def test_run_batch_registration_passes_moments_scaling_setting(tmp_path, monkeypatch):
+    from fireants.gui import runner as gui_runner
+
+    fixed = tmp_path / "fixed_bridge.mha"
+    moving = tmp_path / "moving_bridge.mha"
+    output = tmp_path / "out"
+    _write_image(fixed)
+    _write_image(moving, offset=1)
+    captured = []
+    original_init = gui_runner.MomentsRegistration.__init__
+
+    def wrapped_init(self, *args, **kwargs):
+        captured.append(kwargs.get("perform_scaling"))
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(gui_runner.MomentsRegistration, "__init__", wrapped_init)
+    settings = RegistrationSettings(
+        device="cpu",
+        loss_type="mse",
+        moments_scale=8,
+        moments_perform_scaling=False,
+        affine_scales=[1],
+        affine_iterations=[1],
+        greedy_scales=[1],
+        greedy_iterations=[1],
+        preview_enabled=False,
+        progress_bar=False,
+    )
+
+    run_batch_registration(
+        fixed,
+        [RegistrationJob(moving_bridge=moving, warp_files=[])],
+        output,
+        settings=settings,
+    )
+
+    assert captured == [False]
 
 
 def test_emit_preview_update_skips_syn_preview_work():
@@ -332,14 +384,22 @@ def test_gui_profile_fields_build_settings_offscreen(tmp_path, monkeypatch):
     window = MainWindow()
 
     window.profile_combo.setCurrentText("Memory Saver")
+    window.apply_profile_preset("Memory Saver")
     settings = window._settings_from_profile_fields()
 
     assert settings.loss_type == "mse"
     assert settings.greedy_scales == [4, 2]
+    assert settings.moments_perform_scaling is True
     assert settings.preview_enabled
     assert window.sidebar_tabs.tabText(0) == "Queue"
     assert window.sidebar_tabs.tabText(1) == "Profile"
     assert window.loss_combo.parent() is not window
+    assert "scale differences" in window.moments_scaling_check.toolTip()
+    assert "Similarity metric" in window.loss_combo.toolTip()
+    assert "Compute device" in window.device_edit.toolTip()
+    window.moments_scaling_check.setChecked(False)
+    settings = window._settings_from_profile_fields()
+    assert settings.moments_perform_scaling is False
     window.sidebar_tabs.setCurrentIndex(0)
     window.advanced_profile_button.click()
     assert window.sidebar_tabs.currentIndex() == 1

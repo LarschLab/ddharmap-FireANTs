@@ -64,6 +64,12 @@ except ImportError as exc:  # pragma: no cover - exercised only without optional
 IMAGE_FILTER = "Images (*.nii *.nii.gz *.nrrd *.mha *.mhd *.tif *.tiff);;All files (*)"
 
 
+def _set_help(widget, text: str) -> None:
+    widget.setToolTip(text)
+    if hasattr(widget, "setStatusTip"):
+        widget.setStatusTip(text)
+
+
 @dataclass
 class GuiJob:
     moving_bridge: Path
@@ -140,26 +146,32 @@ class MainWindow(QMainWindow):
         style = self.style()
         self.add_fixed_action = QAction(style.standardIcon(style.StandardPixmap.SP_DialogOpenButton), "Fixed Bridge", self)
         self.add_fixed_action.triggered.connect(self.choose_fixed_bridge)
+        _set_help(self.add_fixed_action, "Choose the fixed reference bridge stack. Other bridge stacks will be aligned into this image space.")
         toolbar.addAction(self.add_fixed_action)
 
         self.add_moving_action = QAction(style.standardIcon(style.StandardPixmap.SP_FileDialogNewFolder), "Add Moving Bridges", self)
         self.add_moving_action.triggered.connect(self.add_moving_bridges)
+        _set_help(self.add_moving_action, "Add one or more moving bridge stacks. Each moving stack is registered to the fixed bridge.")
         toolbar.addAction(self.add_moving_action)
 
         self.add_payload_action = QAction(style.standardIcon(style.StandardPixmap.SP_FileIcon), "Attach Warp Files", self)
         self.add_payload_action.triggered.connect(self.attach_warp_files)
+        _set_help(self.add_payload_action, "Attach moving-side files that should receive the same final transform as the selected moving bridge.")
         toolbar.addAction(self.add_payload_action)
 
         self.remove_action = QAction(style.standardIcon(style.StandardPixmap.SP_TrashIcon), "Remove Row", self)
         self.remove_action.triggered.connect(self.remove_selected_row)
+        _set_help(self.remove_action, "Remove the selected moving bridge row from the queue.")
         toolbar.addAction(self.remove_action)
 
         toolbar.addSeparator()
         self.start_action = QAction(style.standardIcon(style.StandardPixmap.SP_MediaPlay), "Start", self)
         self.start_action.triggered.connect(self.start_registration)
+        _set_help(self.start_action, "Start registration for every queued moving bridge and write outputs into a new run folder.")
         toolbar.addAction(self.start_action)
         self.stop_action = QAction(style.standardIcon(style.StandardPixmap.SP_MediaStop), "Stop", self)
         self.stop_action.triggered.connect(self.stop_registration)
+        _set_help(self.stop_action, "Request cancellation. FireANTs stops after the current operation finishes.")
         toolbar.addAction(self.stop_action)
 
         root = QWidget()
@@ -182,19 +194,34 @@ class MainWindow(QMainWindow):
         self.profile_combo = QComboBox()
         self.profile_combo.addItems(REGISTRATION_PROFILE_NAMES)
         self.profile_combo.currentTextChanged.connect(self.apply_profile_preset)
+        _set_help(self.fixed_path_edit, "Fixed bridge path. This image defines the output space for registration.")
+        _set_help(self.output_path_edit, "Output folder. Each run creates a timestamped child folder here.")
+        _set_help(self.device_edit, "Compute device, such as cuda:0, mps, or cpu. GPU devices are faster but have stricter memory limits.")
+        _set_help(choose_fixed, "Browse for the fixed reference bridge stack.")
+        _set_help(choose_output, "Browse for the folder where registered outputs should be written.")
+        _set_help(self.profile_combo, "Registration preset. Current Full is the full default; Memory Saver uses cheaper settings; Debug is a quick wiring check.")
+        _set_help(self.advanced_profile_button, "Open the Profile tab to tune registration parameters.")
 
         fixed_row = QHBoxLayout()
-        fixed_row.addWidget(QLabel("Fixed"))
+        fixed_label = QLabel("Fixed")
+        _set_help(fixed_label, self.fixed_path_edit.toolTip())
+        fixed_row.addWidget(fixed_label)
         fixed_row.addWidget(self.fixed_path_edit, 1)
         fixed_row.addWidget(choose_fixed)
         output_row = QHBoxLayout()
-        output_row.addWidget(QLabel("Output"))
+        output_label = QLabel("Output")
+        _set_help(output_label, self.output_path_edit.toolTip())
+        output_row.addWidget(output_label)
         output_row.addWidget(self.output_path_edit, 1)
         output_row.addWidget(choose_output)
-        output_row.addWidget(QLabel("Device"))
+        device_label = QLabel("Device")
+        _set_help(device_label, self.device_edit.toolTip())
+        output_row.addWidget(device_label)
         output_row.addWidget(self.device_edit)
         profile_row = QHBoxLayout()
-        profile_row.addWidget(QLabel("Profile"))
+        profile_label = QLabel("Profile")
+        _set_help(profile_label, self.profile_combo.toolTip())
+        profile_row.addWidget(profile_label)
         profile_row.addWidget(self.profile_combo, 1)
         profile_row.addWidget(self.advanced_profile_button)
         root_layout.addLayout(fixed_row)
@@ -211,6 +238,7 @@ class MainWindow(QMainWindow):
         self.moments_order_edit = QLineEdit()
         self.moments_orientation_combo = QComboBox()
         self.moments_orientation_combo.addItems(SUPPORTED_MOMENTS_ORIENTATIONS)
+        self.moments_scaling_check = QCheckBox("Enabled")
         self.rigid_loss_combo = QComboBox()
         self.rigid_loss_combo.addItems(SUPPORTED_LOSS_TYPES)
         self.rigid_mi_bins_edit = QLineEdit()
@@ -230,7 +258,10 @@ class MainWindow(QMainWindow):
         self.greedy_optimizer_combo.addItems(SUPPORTED_GREEDY_OPTIMIZERS)
         self.greedy_reset_check = QCheckBox("Reset")
         self.greedy_offload_check = QCheckBox("Offload")
+        _set_help(self.greedy_reset_check, "Clear Adam optimizer memory whenever Greedy changes resolution scale. This is more conservative but may lose useful momentum.")
+        _set_help(self.greedy_offload_check, "Store Greedy Adam state on CPU. This can reduce GPU memory use at the cost of slower updates.")
         self.greedy_flags_widget = QWidget()
+        _set_help(self.greedy_flags_widget, "Adam memory controls. Reset clears optimizer history between scales; Offload stores Adam state on CPU to reduce GPU memory.")
         greedy_flags = QHBoxLayout(self.greedy_flags_widget)
         greedy_flags.setContentsMargins(0, 0, 0, 0)
         greedy_flags.addWidget(self.greedy_reset_check)
@@ -260,6 +291,7 @@ class MainWindow(QMainWindow):
             self.moments_scale_edit,
             self.moments_order_edit,
             self.moments_orientation_combo,
+            self.moments_scaling_check,
             self.rigid_loss_combo,
             self.rigid_mi_bins_edit,
             self.rigid_scales_edit,
@@ -298,9 +330,15 @@ class MainWindow(QMainWindow):
         self.overall_progress = QProgressBar()
         self.current_progress.setRange(0, 100)
         self.overall_progress.setRange(0, 100)
-        root_layout.addWidget(QLabel("Current stack"))
+        _set_help(self.current_progress, "Progress for the currently running moving bridge stack.")
+        _set_help(self.overall_progress, "Progress across the full queued batch.")
+        current_progress_label = QLabel("Current stack")
+        batch_progress_label = QLabel("Batch")
+        _set_help(current_progress_label, self.current_progress.toolTip())
+        _set_help(batch_progress_label, self.overall_progress.toolTip())
+        root_layout.addWidget(current_progress_label)
         root_layout.addWidget(self.current_progress)
-        root_layout.addWidget(QLabel("Batch"))
+        root_layout.addWidget(batch_progress_label)
         root_layout.addWidget(self.overall_progress)
 
         self.setCentralWidget(root)
@@ -316,9 +354,11 @@ class MainWindow(QMainWindow):
         queue_layout.setContentsMargins(8, 8, 8, 8)
         self.job_list = QListWidget()
         self.job_list.currentRowChanged.connect(self.update_preview)
+        _set_help(self.job_list, "Registration queue. Select a moving bridge row to preview it or attach additional moving-side files.")
         queue_layout.addWidget(self.job_list, 1)
         self.attach_payload_button = QPushButton("Attach warp files")
         self.attach_payload_button.clicked.connect(self.attach_warp_files)
+        _set_help(self.attach_payload_button, "Attach extra moving-side files to the selected row. They are warped with the same final transform as the moving bridge.")
         queue_layout.addWidget(self.attach_payload_button)
         self.sidebar_tabs.addTab(queue_tab, "Queue")
 
@@ -329,71 +369,78 @@ class MainWindow(QMainWindow):
         profile_layout = QVBoxLayout(profile_body)
         profile_layout.setContentsMargins(8, 8, 8, 8)
         profile_layout.setSpacing(8)
-        self.loss_group = self._profile_group("Loss", [("Type", self.loss_combo), ("CC kernel", self.cc_kernel_edit)])
+        self.loss_group = self._profile_group(
+            "Loss",
+            [
+                ("Type", self.loss_combo, "Similarity metric used to judge alignment. CC is a strong default for same-modality images; MI helps when intensities differ; fused versions use optimized kernels when available."),
+                ("CC kernel", self.cc_kernel_edit, "Local window size for cross-correlation. Larger values are smoother and more stable; smaller values follow local detail but can be noisier. Use odd numbers."),
+            ],
+        )
         self.preprocess_group = self._profile_group(
             "Preprocess",
             [
-                ("Winsorize", self.winsorize_enabled_check),
-                ("Lower", self.winsorize_lower_edit),
-                ("Upper", self.winsorize_upper_edit),
+                ("Winsorize", self.winsorize_enabled_check, "Clip extreme intensities before ANTs-like registration. This can reduce the effect of bright outliers."),
+                ("Lower", self.winsorize_lower_edit, "Lower quantile for clipping. Higher values remove more dark outliers."),
+                ("Upper", self.winsorize_upper_edit, "Upper quantile for clipping. Lower values remove more bright outliers."),
             ],
         )
         self.moments_group = self._profile_group(
             "Moments",
             [
-                ("Scale", self.moments_scale_edit),
-                ("Order", self.moments_order_edit),
-                ("Orientation", self.moments_orientation_combo),
+                ("Scale", self.moments_scale_edit, "Downsample factor for the initial moments alignment. Larger values are faster and use less memory; smaller values use more image detail."),
+                ("Order", self.moments_order_edit, "Moment order for initialization. 1 aligns centers only; 2 also aligns principal axes and is required for scaling correction."),
+                ("Orientation", self.moments_orientation_combo, "Which principal-axis orientations to test. rot tests rotations, antirot tests mirrored candidates, and both keeps the best by the selected loss."),
+                ("Scaling", self.moments_scaling_check, "Allow moments initialization to estimate scale differences. Helps when images are stretched or have spacing/size mismatch; requires order 2."),
             ],
         )
         self.rigid_group = self._profile_group(
             "Rigid",
             [
-                ("Metric", self.rigid_loss_combo),
-                ("MI bins", self.rigid_mi_bins_edit),
-                ("Scales", self.rigid_scales_edit),
-                ("Iterations", self.rigid_iterations_edit),
-                ("LR", self.rigid_lr_edit),
+                ("Metric", self.rigid_loss_combo, "Similarity metric for rigid registration. MI is often safer for broad global alignment or different contrasts."),
+                ("MI bins", self.rigid_mi_bins_edit, "Number of intensity bins for mutual information. More bins capture more intensity detail but can be noisier and slower."),
+                ("Scales", self.rigid_scales_edit, "Coarse-to-fine downsample factors. Larger first values start with broad motion; ending near 1 uses full detail."),
+                ("Iterations", self.rigid_iterations_edit, "Optimization steps at each rigid scale. More iterations can improve alignment but take longer."),
+                ("LR", self.rigid_lr_edit, "Rigid learning rate. Larger values move faster but can overshoot; smaller values are slower and more cautious."),
             ],
         )
         self.affine_group = self._profile_group(
             "Affine",
             [
-                ("Metric", self.affine_loss_combo),
-                ("MI bins", self.affine_mi_bins_edit),
-                ("Scales", self.affine_scales_edit),
-                ("Iterations", self.affine_iterations_edit),
-                ("LR", self.affine_lr_edit),
+                ("Metric", self.affine_loss_combo, "Similarity metric for affine refinement. CC is good for matching intensity structure; MI helps across contrasts."),
+                ("MI bins", self.affine_mi_bins_edit, "Number of intensity bins for affine mutual information. More bins add detail but cost memory/time."),
+                ("Scales", self.affine_scales_edit, "Coarse-to-fine affine levels. Coarse scales capture big global differences before full-detail refinement."),
+                ("Iterations", self.affine_iterations_edit, "Optimization steps at each affine scale. More steps can improve fit but increase runtime."),
+                ("LR", self.affine_lr_edit, "Affine learning rate. Larger values update faster but can become unstable."),
             ],
         )
         self.greedy_group = self._profile_group(
             "Greedy",
             [
-                ("Scales", self.greedy_scales_edit),
-                ("Iterations", self.greedy_iterations_edit),
-                ("LR", self.greedy_lr_edit),
-                ("Optimizer", self.greedy_optimizer_combo),
-                ("Adam state", self.greedy_flags_widget),
+                ("Scales", self.greedy_scales_edit, "Coarse-to-fine deformable levels. Higher scales are cheaper and capture broad shape changes; lower scales add local detail."),
+                ("Iterations", self.greedy_iterations_edit, "Deformable update steps at each Greedy scale. More steps can fit more detail but take longer."),
+                ("LR", self.greedy_lr_edit, "Greedy warp learning rate. Larger values make bigger deformation updates; reduce it if the warp looks unstable."),
+                ("Optimizer", self.greedy_optimizer_combo, "Warp optimizer. Adam adapts update size per location; SGD is simpler and can use less optimizer memory."),
+                ("Adam state", self.greedy_flags_widget, "Adam memory controls. Reset clears optimizer history between scales; Offload stores Adam state on CPU to reduce GPU memory."),
             ],
         )
         self.syn_group = self._profile_group(
             "SyN",
             [
-                ("Metric", self.syn_loss_combo),
-                ("CC kernel", self.syn_cc_kernel_edit),
-                ("Scales", self.syn_scales_edit),
-                ("Iterations", self.syn_iterations_edit),
-                ("LR", self.syn_lr_edit),
-                ("Optimizer", self.syn_optimizer_combo),
+                ("Metric", self.syn_loss_combo, "Similarity metric for symmetric deformable registration. CC is the usual same-modality choice."),
+                ("CC kernel", self.syn_cc_kernel_edit, "Local CC window for SyN. Larger windows are smoother; smaller windows follow finer detail."),
+                ("Scales", self.syn_scales_edit, "Coarse-to-fine SyN levels. SyN moves both images toward a midpoint, so it is heavier than Greedy."),
+                ("Iterations", self.syn_iterations_edit, "SyN update steps at each scale. More iterations can improve symmetric alignment but cost more time."),
+                ("LR", self.syn_lr_edit, "SyN learning rate. SyN usually uses a smaller value than Greedy because it updates two warps."),
+                ("Optimizer", self.syn_optimizer_combo, "SyN warp optimizer. Adam adapts per location; SGD is simpler and closer to the ANTs-like preset."),
             ],
         )
         self.preview_group = self._profile_group(
             "Preview",
             [
-                ("Live", self.preview_enabled_check),
-                ("Max side", self.preview_max_side_edit),
-                ("Warp sigma", self.smooth_warp_sigma_edit),
-                ("Grad sigma", self.smooth_grad_sigma_edit),
+                ("Live", self.preview_enabled_check, "Show live magenta/green overlays after registration stages. Turning it off saves preview work."),
+                ("Max side", self.preview_max_side_edit, "Largest preview image side in pixels. Larger previews show more detail but cost more memory/time."),
+                ("Warp sigma", self.smooth_warp_sigma_edit, "Smooth the deformation field. Higher values make smoother, less flexible warps."),
+                ("Grad sigma", self.smooth_grad_sigma_edit, "Smooth deformation gradients before updates. Higher values reduce noisy local motion."),
             ],
         )
         for group in (
@@ -417,8 +464,14 @@ class MainWindow(QMainWindow):
         layout = QFormLayout(group)
         layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
-        for label, widget in rows:
-            layout.addRow(label, widget)
+        for row in rows:
+            label, widget = row[:2]
+            label_widget = QLabel(label)
+            if len(row) > 2:
+                tooltip = row[2]
+                _set_help(label_widget, tooltip)
+                _set_help(widget, tooltip)
+            layout.addRow(label_widget, widget)
         return group
 
     def _set_form_row_visible(self, widget: QWidget, visible: bool) -> None:
@@ -438,6 +491,7 @@ class MainWindow(QMainWindow):
             self.moments_scale_edit,
             self.moments_order_edit,
             self.moments_orientation_combo,
+            self.moments_scaling_check,
             self.rigid_loss_combo,
             self.rigid_mi_bins_edit,
             self.rigid_scales_edit,
@@ -469,14 +523,20 @@ class MainWindow(QMainWindow):
         preview_layout = QVBoxLayout(preview)
         preview_layout.setContentsMargins(8, 0, 0, 0)
         title_row = QHBoxLayout()
-        title_row.addWidget(QLabel("Moving / live overlay"))
+        moving_title = QLabel("Moving / live overlay")
+        fixed_title = QLabel("Fixed")
+        _set_help(moving_title, "Selected moving bridge preview. During registration this can show the live magenta/green overlay.")
+        _set_help(fixed_title, "Fixed reference bridge preview. Moving outputs are written in this image space.")
+        title_row.addWidget(moving_title)
         title_row.addStretch(1)
-        title_row.addWidget(QLabel("Fixed"))
+        title_row.addWidget(fixed_title)
         preview_layout.addLayout(title_row)
 
         preview_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.moving_preview = QLabel("No moving bridge selected")
         self.fixed_preview = QLabel("No fixed bridge selected")
+        _set_help(self.moving_preview, "Selected moving bridge preview. Add a moving bridge row to see it here.")
+        _set_help(self.fixed_preview, "Fixed bridge preview. Choose a fixed bridge to see it here.")
         for label in (self.moving_preview, self.fixed_preview):
             label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             label.setMinimumSize(220, 220)
@@ -515,6 +575,7 @@ class MainWindow(QMainWindow):
         settings.moments_scale = float(self.settings_store.value("profile/moments_scale", settings.moments_scale))
         settings.moments_order = int(self.settings_store.value("profile/moments_order", settings.moments_order))
         settings.moments_orientation = str(self.settings_store.value("profile/moments_orientation", settings.moments_orientation))
+        settings.moments_perform_scaling = _as_bool(self.settings_store.value("profile/moments_perform_scaling", settings.moments_perform_scaling))
         settings.rigid_loss_type = str(self.settings_store.value("profile/rigid_loss_type", settings.rigid_loss_type))
         settings.rigid_mi_bins = int(self.settings_store.value("profile/rigid_mi_bins", settings.rigid_mi_bins))
         settings.rigid_scales = parse_float_list(str(self.settings_store.value("profile/rigid_scales", _format_number_list(settings.rigid_scales))), "Rigid scales")
@@ -574,6 +635,7 @@ class MainWindow(QMainWindow):
         self.moments_scale_edit.setText(_format_number(settings.moments_scale))
         self.moments_order_edit.setText(str(settings.moments_order))
         self.moments_orientation_combo.setCurrentText(settings.moments_orientation)
+        self.moments_scaling_check.setChecked(settings.moments_perform_scaling)
         self.rigid_loss_combo.setCurrentText(settings.rigid_loss_type)
         self.rigid_mi_bins_edit.setText(str(settings.rigid_mi_bins))
         self.rigid_scales_edit.setText(_format_number_list(settings.rigid_scales))
@@ -611,6 +673,7 @@ class MainWindow(QMainWindow):
         settings.moments_scale = float(self.moments_scale_edit.text())
         settings.moments_order = int(self.moments_order_edit.text())
         settings.moments_orientation = self.moments_orientation_combo.currentText()
+        settings.moments_perform_scaling = self.moments_scaling_check.isChecked()
         settings.rigid_loss_type = self.rigid_loss_combo.currentText()
         settings.rigid_mi_bins = int(self.rigid_mi_bins_edit.text())
         settings.rigid_scales = parse_float_list(self.rigid_scales_edit.text(), "Rigid scales")
@@ -650,6 +713,7 @@ class MainWindow(QMainWindow):
         self.settings_store.setValue("profile/moments_scale", settings.moments_scale)
         self.settings_store.setValue("profile/moments_order", settings.moments_order)
         self.settings_store.setValue("profile/moments_orientation", settings.moments_orientation)
+        self.settings_store.setValue("profile/moments_perform_scaling", settings.moments_perform_scaling)
         self.settings_store.setValue("profile/rigid_loss_type", settings.rigid_loss_type)
         self.settings_store.setValue("profile/rigid_mi_bins", settings.rigid_mi_bins)
         self.settings_store.setValue("profile/rigid_scales", _format_number_list(settings.rigid_scales))

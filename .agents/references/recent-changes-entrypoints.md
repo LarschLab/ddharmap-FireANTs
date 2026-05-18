@@ -16,6 +16,14 @@ Purpose: append completed meaningful entrypoint, docs, tutorial, or script work.
 
 ## Log
 
+## 2026-05-18 - GUI Moments scaling and parameter tooltips
+
+- Slice goal: expose Moments scale correction in the GUI and make advanced registration parameters easier for new users to understand.
+- Passes completed: added a GUI default-on Moments scaling checkbox, persisted it through profile settings, passed it into `MomentsRegistration`, and added beginner-friendly native Qt tooltips across setup, queue, profile, preview, and progress controls.
+- What changed: `RegistrationSettings` now includes `moments_perform_scaling`; the Moments/Affine/Greedy GUI pipeline enables scale correction by default when using second-order moments; profile validation rejects scaling with first-order moments.
+- Rerun implications: GUI defaults now allow initial scale correction during Moments registration. Disable the Moments `Scaling` checkbox to recover the previous no-scaling GUI initialization behavior.
+- Validation performed: `python -m pytest -q tests/test_gui_runner.py`; `python -m compileall -q fireants/gui tests/test_gui_runner.py`; offscreen PySide screenshot `/tmp/fireants_gui_tooltips_scaling.png` verified the checked Scaling control and non-overlapping profile layout.
+
 ## 2026-05-18 - ANTs-like SyN GUI profile
 
 - Slice goal: add a GUI registration profile that mirrors the user's prior ANTs stage structure without expanding CLI compatibility.

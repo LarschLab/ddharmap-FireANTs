@@ -46,6 +46,7 @@ class RegistrationSettings:
     moments_scale: float = 1.0
     moments_order: int = 2
     moments_orientation: str = "rot"
+    moments_perform_scaling: bool = True
     rigid_loss_type: str = "mi"
     rigid_mi_bins: int = 32
     rigid_scales: List[float] = field(default_factory=lambda: [12, 8, 4, 2])
@@ -180,6 +181,8 @@ def validate_registration_settings(settings: RegistrationSettings) -> None:
         raise ValueError("Moments scale must be positive")
     if int(settings.moments_order) <= 0:
         raise ValueError("Moments order must be positive")
+    if settings.pipeline == PIPELINE_MOMENTS_AFFINE_GREEDY and settings.moments_perform_scaling and int(settings.moments_order) != 2:
+        raise ValueError("Moments scaling requires moments order 2")
     if settings.moments_orientation not in SUPPORTED_MOMENTS_ORIENTATIONS:
         raise ValueError(f"Moments orientation must be one of {', '.join(SUPPORTED_MOMENTS_ORIENTATIONS)}")
     _validate_scales_and_iterations(settings.rigid_scales, settings.rigid_iterations, "Rigid")
@@ -421,6 +424,7 @@ def run_batch_registration(
                         moving_images=moving_batch,
                         moments=settings.moments_order,
                         orientation=settings.moments_orientation,
+                        perform_scaling=settings.moments_perform_scaling,
                         loss_type=settings.loss_type,
                         cc_kernel_size=settings.cc_kernel_size,
                         progress_bar=settings.progress_bar,

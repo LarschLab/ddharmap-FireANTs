@@ -85,6 +85,7 @@ cc_kernel_size = 5
 moments_scale = 1.0
 moments_order = 2
 moments_orientation = "rot"
+moments_perform_scaling = True
 affine_scales = [4, 2, 1]
 affine_iterations = [100, 50, 25]
 greedy_scales = [4, 2, 1]
