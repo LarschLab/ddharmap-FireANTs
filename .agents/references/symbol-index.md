@@ -23,7 +23,7 @@ Use this file when a task changes public surface, docs references, imports, or o
 ## Registration
 
 - `fireants.registration.abstract.AbstractRegistration`: shared lifecycle, loss selection, masked mode, downsampling, convergence, optional progress callbacks, and evaluation contract; `evaluate(..., interpolation_device=...)` may route output interpolation to a safer device.
-- `fireants.registration.moments.MomentsRegistration`: physical-space initial alignment.
+- `fireants.registration.moments.MomentsRegistration`: physical-space initial alignment; 3D orientation selection preserves moving Z direction by default, with `preserve_z_direction=False` as the explicit opt-out.
 - `fireants.registration.rigid.RigidRegistration`: quaternion-based rigid registration.
 - `fireants.registration.legacyrigid.RigidRegistration`: legacy rigid implementation kept for compatibility.
 - `fireants.registration.affine.AffineRegistration`: affine registration.

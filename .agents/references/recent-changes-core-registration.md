@@ -16,6 +16,14 @@ Purpose: append completed meaningful core registration work.
 
 ## Log
 
+## 2026-05-18 - Moments Z-direction preservation
+
+- Slice goal: prevent 3D Moments orientation initialization from selecting a moving-Z reversing candidate by default.
+- Passes completed: added default Z-direction filtering to 3D Moments candidate scoring with an explicit `preserve_z_direction=False` opt-out.
+- What changed: `MomentsRegistration` now prefers the best candidate whose centerline maps to increasing moving Z, falling back to unrestricted scoring only if no candidate preserves Z.
+- Rerun implications: downstream Affine/Greedy GUI runs should no longer inherit a Z-reversing Moments initialization unless the caller opts out.
+- Validation performed: `python -m pytest -q tests/test_moments_registration.py::TestMomentsRegistration3D::test_orientation_preserves_z_direction_by_default tests/test_moments_registration.py::TestMomentsRegistration3D::test_orientation_can_opt_out_of_z_direction_preservation`; `python -m pytest -q tests/test_gui_runner.py`; MPS real-data rerun under `/Users/ddharmap/dataProcessing/testReg/fireants_gui_run_z_preserve_20260518_153448` with `z_orientation_warning=false` for Moments, Affine, and Greedy.
+
 ## 2026-05-17 - MPS moments determinant fallback
 
 - Slice goal: keep GUI runner MPS smoke coverage on stock PyTorch without relying on global CPU fallback.

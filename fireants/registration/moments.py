@@ -55,6 +55,7 @@ class MomentsRegistration(AbstractRegistration):
                 cc_kernel_size: int = 3,
                 custom_loss: nn.Module = None, 
                 perform_scaling: bool = False,
+                preserve_z_direction: bool = True,
                 **kwargs
                 ) -> None:
         super().__init__(scales=[scale], iterations=[1], fixed_images=fixed_images, moving_images=moving_images, 
@@ -75,6 +76,7 @@ class MomentsRegistration(AbstractRegistration):
         # set device and dims
         device = fixed_images.device
         self.perform_scaling = perform_scaling
+        self.preserve_z_direction = preserve_z_direction
         self.moments = moments
         self.orientation = orientation
         self.transl_mode = transl_mode
@@ -163,6 +165,9 @@ class MomentsRegistration(AbstractRegistration):
         # initialize best idx and best metric for each batch id
         best_idx = torch.zeros(self.opt_size, dtype=torch.long, device=eval_device)
         best_metric = torch.zeros(self.opt_size, device=eval_device, dtype=fixed_arrays.dtype) + np.inf
+        best_preserved_idx = torch.zeros(self.opt_size, dtype=torch.long, device=eval_device)
+        best_preserved_metric = torch.zeros(self.opt_size, device=eval_device, dtype=fixed_arrays.dtype) + np.inf
+        has_preserved = torch.zeros(self.opt_size, dtype=torch.bool, device=eval_device)
 
         # for each orientation, compute R, t and find best metric
         for ori_id, ori in enumerate(oris):
@@ -188,8 +193,19 @@ class MomentsRegistration(AbstractRegistration):
             index = torch.where(loss_val < best_metric)[0]
             best_metric[index] = loss_val[index]
             best_idx[index] = ori_id
+            if self.preserve_z_direction and self.dims == 3:
+                center_y = moved_coords_m.shape[2] // 2
+                center_x = moved_coords_m.shape[3] // 2
+                centerline_z = moved_coords_m[:, :, center_y, center_x, 2]
+                preserves_z = (centerline_z[:, -1] - centerline_z[:, 0]) >= -1e-6
+                preserved_index = torch.where(preserves_z & (loss_val < best_preserved_metric))[0]
+                best_preserved_metric[preserved_index] = loss_val[preserved_index]
+                best_preserved_idx[preserved_index] = ori_id
+                has_preserved[preserved_index] = True
         
         # get best orientation  # [N, 3, 3]
+        if self.preserve_z_direction and self.dims == 3:
+            best_idx = torch.where(has_preserved, best_preserved_idx, best_idx)
         ori = oris[best_idx, 0].to(original_device)
         return ori
 

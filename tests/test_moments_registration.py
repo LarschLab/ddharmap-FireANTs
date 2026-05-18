@@ -6,6 +6,7 @@ from pathlib import Path
 import logging
 
 # Import FireANTs components
+import fireants.registration.moments as moments_module
 from fireants.registration.moments import MomentsRegistration
 from fireants.io.image import Image, BatchedImages
 
@@ -17,6 +18,14 @@ except ImportError:
 # Set up logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+
+def _centerline_z_delta(orientation, xyz_f, shape):
+    coords = torch.einsum('ntd, n...d->n...t', orientation.transpose(-1, -2), xyz_f)
+    coords = coords.view(-1, *shape, 3)
+    center_y = coords.shape[2] // 2
+    center_x = coords.shape[3] // 2
+    return coords[:, -1, center_y, center_x, 2] - coords[:, 0, center_y, center_x, 2]
 
 def generate_2d_ellipse(size=128, axes=(40, 20), center=None, angle=None, rng=None):
     """Generate a 2D ellipse in a size x size image.
@@ -295,3 +304,104 @@ class TestMomentsRegistration3D:
         
         logger.info(f"Final Dice score: {dice_score:.3f}")
         assert dice_score > 0.98, f"Final Dice score ({dice_score:.3f}) is below threshold"
+
+    def test_orientation_preserves_z_direction_by_default(self, monkeypatch):
+        """Default 3D moments orientation should not select a Z-reversing candidate."""
+        fixed_array = np.zeros((5, 5, 5), dtype=np.float32)
+        fixed_batch = BatchedImages([Image(sitk.GetImageFromArray(fixed_array), device='cpu')])
+        moving_batch = BatchedImages([Image(sitk.GetImageFromArray(fixed_array), device='cpu')])
+        reg = MomentsRegistration(
+            scale=1.0,
+            fixed_images=fixed_batch,
+            moving_images=moving_batch,
+            moments=2,
+            orientation='rot',
+            blur=False,
+            loss_type='mse',
+        )
+
+        def z_delta_sampler(array, grid, **kwargs):
+            center_y = grid.shape[2] // 2
+            center_x = grid.shape[3] // 2
+            delta = grid[:, -1, center_y, center_x, 2] - grid[:, 0, center_y, center_x, 2]
+            return delta.view(-1, 1, 1, 1, 1).expand_as(array)
+
+        monkeypatch.setattr(moments_module, "torch_grid_sampler_3d", z_delta_sampler)
+        reg.loss_fn = lambda moved, fixed: moved
+
+        fixed_arrays = torch.zeros((1, 1, 5, 5, 5), dtype=torch.float32)
+        moving_arrays = torch.zeros_like(fixed_arrays)
+        z_grid, y_grid, x_grid = torch.meshgrid(
+            torch.linspace(-1, 1, 5),
+            torch.linspace(-1, 1, 5),
+            torch.linspace(-1, 1, 5),
+            indexing='ij',
+        )
+        coords = torch.stack((x_grid, y_grid, z_grid), dim=-1).reshape(1, -1, 3)
+        identity = torch.eye(3).reshape(1, 3, 3)
+        zero = torch.zeros((1, 3), dtype=torch.float32)
+
+        orientation = reg.find_best_detmat_3d(
+            identity,
+            identity,
+            fixed_arrays,
+            moving_arrays,
+            zero,
+            zero,
+            coords,
+            coords,
+            identity,
+        )
+
+        assert _centerline_z_delta(orientation, coords, fixed_arrays.shape[2:]).item() > 0
+
+    def test_orientation_can_opt_out_of_z_direction_preservation(self, monkeypatch):
+        """The explicit opt-out keeps the unrestricted historical candidate scoring."""
+        fixed_array = np.zeros((5, 5, 5), dtype=np.float32)
+        fixed_batch = BatchedImages([Image(sitk.GetImageFromArray(fixed_array), device='cpu')])
+        moving_batch = BatchedImages([Image(sitk.GetImageFromArray(fixed_array), device='cpu')])
+        reg = MomentsRegistration(
+            scale=1.0,
+            fixed_images=fixed_batch,
+            moving_images=moving_batch,
+            moments=2,
+            orientation='rot',
+            blur=False,
+            loss_type='mse',
+            preserve_z_direction=False,
+        )
+
+        def z_delta_sampler(array, grid, **kwargs):
+            center_y = grid.shape[2] // 2
+            center_x = grid.shape[3] // 2
+            delta = grid[:, -1, center_y, center_x, 2] - grid[:, 0, center_y, center_x, 2]
+            return delta.view(-1, 1, 1, 1, 1).expand_as(array)
+
+        monkeypatch.setattr(moments_module, "torch_grid_sampler_3d", z_delta_sampler)
+        reg.loss_fn = lambda moved, fixed: moved
+
+        fixed_arrays = torch.zeros((1, 1, 5, 5, 5), dtype=torch.float32)
+        moving_arrays = torch.zeros_like(fixed_arrays)
+        z_grid, y_grid, x_grid = torch.meshgrid(
+            torch.linspace(-1, 1, 5),
+            torch.linspace(-1, 1, 5),
+            torch.linspace(-1, 1, 5),
+            indexing='ij',
+        )
+        coords = torch.stack((x_grid, y_grid, z_grid), dim=-1).reshape(1, -1, 3)
+        identity = torch.eye(3).reshape(1, 3, 3)
+        zero = torch.zeros((1, 3), dtype=torch.float32)
+
+        orientation = reg.find_best_detmat_3d(
+            identity,
+            identity,
+            fixed_arrays,
+            moving_arrays,
+            zero,
+            zero,
+            coords,
+            coords,
+            identity,
+        )
+
+        assert _centerline_z_delta(orientation, coords, fixed_arrays.shape[2:]).item() < 0
